@@ -104,3 +104,10 @@ Folder navigation for scope configuration loads one level of GitHub/FTP metadata
 The line-by-line Diff Check now treats Windows CRLF (`\r\n`) and Unix LF (`\n`) as the same logical newline. A difference only in EOL encoding no longer shows every line as both added and removed. When the normalized text matches but raw bytes differ, the diff explicitly explains the discrepancy.
 
 **Important:** Content hashes, changed-file status and transfer preconditions remain byte-exact. An EOL-only change can still appear as a selectable changed file; it does not silently skip an overwrite or hide a conflict.
+
+
+## Ignore EOL-only changes in Diff Check (v0.8.2)
+
+Files that contain the same UTF-8 text but differ *only* in LF / CRLF / lone-CR line endings now count as **IDENTICAL** during folder/file comparison. They are excluded from changed-file counts, selection checkboxes, and either transfer direction; no manual checkbox cleanup is necessary.
+
+For ordinary LF-vs-CRLF differences, the comparison verifies Git blob hashes for normalized LF and CRLF representations locally using streaming/constant-memory processing (no extra GitHub download). To cover rare repositories with *mixed* line endings, small text files (up to 256 KiB) may be downloaded from GitHub for an additional verified comparison. Binary content, invalid UTF-8, changed whitespace, changed trailing newlines, BOM differences, and actual code changes remain significant. Files exceeding the normal 20-MiB per-file limit remain unsupported. Existing exact Git SHA / FTP SHA drift checks are retained for any files actually transferred.

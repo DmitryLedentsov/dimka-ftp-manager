@@ -95,6 +95,7 @@ object SyncComparisonEngine {
                     val githubPath = if (mapping.githubDirectory)
                         SyncPaths.githubDestination(mapping, relative) else mapping.githubPath
                     var ftpSha = ""
+                    var sameExceptLineEndings = false
                     var actualFtpSize = remote?.size ?: -1L
                     val tooLarge = (github != null && github.size > MAX_FILE_BYTES) ||
                         (remote != null && remote.size > MAX_FILE_BYTES)
@@ -103,14 +104,43 @@ object SyncComparisonEngine {
                         try {
                             ftp.download(remote.path, local)
                             actualFtpSize = local.length()
-                            if (actualFtpSize <= MAX_FILE_BYTES) ftpSha = gitBlobHash(local)
+                            if (actualFtpSize <= MAX_FILE_BYTES) {
+                                ftpSha = gitBlobHash(local)
+                                if (github != null && github.sha.isNotBlank() &&
+                                    ftpSha != github.sha) {
+                                    // Prefer hashing canonical LF / CRLF locally: zero extra
+                                    // GitHub downloads for the common FTP-LF/GitHub-CRLF case.
+                                    sameExceptLineEndings =
+                                        LineEndingEquivalence.matchesGitBlob(local, github.sha)
+                                    if (!sameExceptLineEndings &&
+                                        github.size in 0..TextDiff.MAX_DIFF_SIZE.toLong() &&
+                                        actualFtpSize <= TextDiff.MAX_DIFF_SIZE &&
+                                        LineEndingEquivalence.isUtf8TextWithLineBreak(local)) {
+                                        // Mixed newline styles on GitHub: fetch only small
+                                        // candidates, and verify the same Git tree snapshot.
+                                        val gitLocal = File(temp, "github-eol")
+                                        try {
+                                            client.download(mapping.repository, mapping.branch,
+                                                githubPath, gitLocal)
+                                            check(gitBlobHash(gitLocal) == github.sha) {
+                                                "GitHub-файл изменился во время проверки: " +
+                                                    githubPath + ". Запусти Diff Check ещё раз."
+                                            }
+                                            sameExceptLineEndings =
+                                                LineEndingEquivalence.sameNormalizedContent(
+                                                    local, gitLocal)
+                                        } finally { gitLocal.delete() }
+                                    }
+                                }
+                            }
                         } finally { local.delete() }
                     }
                     val difference = when {
                         tooLarge || actualFtpSize > MAX_FILE_BYTES -> FileDifference.TOO_LARGE
                         github == null -> FileDifference.ONLY_FTP
                         remote == null -> FileDifference.ONLY_GITHUB
-                        github.sha.isNotBlank() && github.sha == ftpSha -> FileDifference.IDENTICAL
+                        github.sha.isNotBlank() && (github.sha == ftpSha ||
+                            sameExceptLineEndings) -> FileDifference.IDENTICAL
                         else -> FileDifference.CHANGED
                     }
                     result.add(ComparedFile(relative, githubPath, remotePath, difference,

@@ -72,6 +72,88 @@ class DiffCheckTest {
         }
     }
 
+
+    @Test fun eolOnlyDiffShouldBeConsideredIdenticalForSync() {
+        val git = File.createTempFile("dimka-eol-git-", ".php")
+        val ftp = File.createTempFile("dimka-eol-ftp-", ".php")
+        try {
+            val rows = (1..481).map { "<?php // code line $it" }
+            git.writeText(rows.joinToString("\r\n") + "\r\n")
+            ftp.writeText(rows.joinToString("\n") + "\n")
+            assertTrue(
+                com.dimka.ftpmanager.transfer.LineEndingEquivalence.matchesGitBlob(
+                    ftp, SyncComparisonEngine.gitBlobHash(git))
+            )
+            assertTrue(
+                com.dimka.ftpmanager.transfer.LineEndingEquivalence.matchesGitBlob(
+                    git, SyncComparisonEngine.gitBlobHash(ftp))
+            )
+        } finally { git.delete(); ftp.delete() }
+    }
+
+    @Test fun nonEolEditsStillAppearAndTrailingNewlineMatters() {
+        val git = File.createTempFile("dimka-eol-git-", ".txt")
+        val ftp = File.createTempFile("dimka-eol-ftp-", ".txt")
+        try {
+            git.writeText("header\r\nchanged\r\nfooter\r\n")
+            ftp.writeText("header\noriginal\nfooter\n")
+            assertTrue(
+                !com.dimka.ftpmanager.transfer.LineEndingEquivalence.matchesGitBlob(
+                    ftp, SyncComparisonEngine.gitBlobHash(git))
+            )
+            assertTrue(
+                !com.dimka.ftpmanager.transfer.LineEndingEquivalence.sameNormalizedContent(
+                    ftp, git)
+            )
+            git.writeText("header\r\noriginal\r\nfooter\r\n")
+            assertTrue(
+                com.dimka.ftpmanager.transfer.LineEndingEquivalence.matchesGitBlob(
+                    ftp, SyncComparisonEngine.gitBlobHash(git))
+            )
+            git.writeText("header\r\noriginal\r\nfooter")
+            assertTrue(
+                !com.dimka.ftpmanager.transfer.LineEndingEquivalence.matchesGitBlob(
+                    ftp, SyncComparisonEngine.gitBlobHash(git))
+            )
+        } finally { git.delete(); ftp.delete() }
+    }
+
+    @Test fun mixedGitLineEndingsUseContentFallbackAndDontHideWhitespaceChanges() {
+        val git = File.createTempFile("dimka-mixed-git-", ".txt")
+        val ftp = File.createTempFile("dimka-mixed-ftp-", ".txt")
+        try {
+            git.writeText("header\r\nbody\nfooter\r\n")
+            ftp.writeText("header\nbody\nfooter\n")
+            assertTrue(
+                !com.dimka.ftpmanager.transfer.LineEndingEquivalence.matchesGitBlob(
+                    ftp, SyncComparisonEngine.gitBlobHash(git))
+            )
+            assertTrue(
+                com.dimka.ftpmanager.transfer.LineEndingEquivalence.sameNormalizedContent(
+                    ftp, git)
+            )
+            git.writeText("header\r\nbody \nfooter\r\n")
+            assertTrue(
+                !com.dimka.ftpmanager.transfer.LineEndingEquivalence.sameNormalizedContent(
+                    ftp, git)
+            )
+        } finally { git.delete(); ftp.delete() }
+    }
+
+    @Test fun binaryAndInvalidUtf8AreNotNormalized() {
+        val git = File.createTempFile("dimka-bin-git-", ".bin")
+        val ftp = File.createTempFile("dimka-bin-ftp-", ".bin")
+        try {
+            git.writeBytes(byteArrayOf(1, 0, 10, 2))
+            ftp.writeBytes(byteArrayOf(1, 0, 13, 10, 2))
+            assertTrue(!com.dimka.ftpmanager.transfer.LineEndingEquivalence.matchesGitBlob(
+                ftp, SyncComparisonEngine.gitBlobHash(git)))
+            ftp.writeBytes(byteArrayOf(0xC3.toByte(), 0x28, 10))
+            assertTrue(!com.dimka.ftpmanager.transfer.LineEndingEquivalence.matchesGitBlob(
+                ftp, SyncComparisonEngine.gitBlobHash(git)))
+        } finally { git.delete(); ftp.delete() }
+    }
+
     @Test fun binaryFilesCannotBeRenderedAsText() {
         val file = File.createTempFile("dimka-bin-", ".bin")
         try {
