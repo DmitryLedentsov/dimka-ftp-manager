@@ -132,6 +132,16 @@ object SyncComparisonEngine {
                     RemoteClient.connect(context, server).use { ftp -> ftp.download(file.ftpPath, it) }
                 }
             } else null
+            if (github != null) {
+                check(gitBlobHash(github) == file.githubSha) {
+                    "GitHub-файл изменился после проверки. Нажми Diff Check заново."
+                }
+            }
+            if (remote != null) {
+                check(gitBlobHash(remote) == file.ftpSha) {
+                    "FTP-файл изменился после проверки. Нажми Diff Check заново."
+                }
+            }
             return TextDiff.preview(github, remote)
         } finally {
             folder.deleteRecursively()
