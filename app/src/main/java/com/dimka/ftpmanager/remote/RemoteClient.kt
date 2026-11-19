@@ -139,7 +139,7 @@ object RemoteClient {
             val sftp = client.newSFTPClient()
             return object : RemoteSession {
                 override fun list(path: String): List<RemoteEntry> = sftp.ls(cleanRemotePath(path))
-                    .filter { it.name != "." && it.name != ".." && !it.isSymbolicLink }
+                    .filter { it.name != "." && it.name != ".." && (it.isDirectory || it.isRegularFile) }
                     .map { RemoteEntry(it.name, joinRemote(path, it.name), it.isDirectory, it.attributes.size) }
                     .sortedWith(compareByDescending<RemoteEntry> { it.directory }.thenBy { it.name.lowercase() })
                 override fun download(path: String, local: File) {
