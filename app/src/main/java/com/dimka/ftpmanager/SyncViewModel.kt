@@ -141,7 +141,9 @@ class SyncViewModel(app: Application) : AndroidViewModel(app) {
                 val result = withContext(Dispatchers.IO) {
                     SyncComparisonEngine.compare(getApplication(), mapping, { done, total ->
                         // State update stays on the main thread; IO callback runs on Default/IO.
-                        checkProgress = "Проверено " + done + " / " + total
+                        if (done == total || done % 5 == 0) {
+                            viewModelScope.launch { checkProgress = "Проверено " + done + " / " + total }
+                        }
                     })
                 }
                 if (mappings.any { it == mapping }) recordCheck(id, result)
@@ -221,9 +223,24 @@ class SyncViewModel(app: Application) : AndroidViewModel(app) {
             mappings = value
         } catch (e: Exception) { message = "Не удалось сохранить: " + e.message }
     }
-    private fun replace(id: String, fn: (SyncMapping) -> SyncMapping) =
-        save(mappings.map { if (it.id == id) fn(it) else it })
-    fun addMapping() = save(mappings + SyncMapping(name = "Соответствие " + (mappings.size + 1)))
+    private fun replace(id: String, fn: (SyncMapping) -> SyncMapping) {
+        val old = mappings.firstOrNull { it.id == id } ?: return
+        val next = fn(old)
+        save(mappings.map { if (it.id == id) next else it })
+        if (old.copy(name = next.name) != next && next in mappings) {
+            store.updateCheckStatus(id) {
+                it.copy(status = "UNKNOWN", checkedAt = 0L, matching = 0, changed = 0, error = "")
+            }
+            statuses = store.checkStatuses()
+            comparison = null
+            selectedPaths = emptySet()
+        }
+    }
+    fun addMapping() {
+        val next = SyncMapping(name = "Соответствие " + (mappings.size + 1))
+        save(mappings + next)
+        if (next in mappings) openMapping(next.id)
+    }
     fun renameMapping(id: String, name: String) {
         if (name.isBlank()) { message = "Укажи название"; return }
         replace(id) { it.copy(name = name.trim()) }
