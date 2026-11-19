@@ -63,9 +63,14 @@ object SyncComparisonEngine {
                 FileOperations.scan(ftp, mapping.ftpPath, checkpoint = checkpoint).files.forEach {
                     ftpFiles[it.relative] = it
                 }
-            } else if (ftp.existsFile(mapping.ftpPath)) {
-                ftpFiles["@file"] = FileOperations.RemoteFile(mapping.ftpPath,
-                    mapping.ftpPath.substringAfterLast('/'), 0L)
+            } else {
+                val parent = mapping.ftpPath.substringBeforeLast('/', "/").ifBlank { "/" }
+                val entry = ftp.list(parent).firstOrNull {
+                    !it.directory && it.path == mapping.ftpPath
+                }
+                if (entry != null) {
+                    ftpFiles["@file"] = FileOperations.RemoteFile(entry.path, entry.name, entry.size)
+                }
             }
             val keys = (gitFiles.keys + ftpFiles.keys).distinct().sorted()
             check(keys.size <= SyncPaths.MAX_FILES) {
