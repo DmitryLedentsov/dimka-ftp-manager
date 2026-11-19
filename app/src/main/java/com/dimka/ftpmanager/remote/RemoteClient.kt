@@ -6,6 +6,7 @@ import com.dimka.ftpmanager.data.RemoteEntry
 import com.dimka.ftpmanager.data.ServerProfile
 import net.schmizz.sshj.SSHClient
 import net.schmizz.sshj.sftp.SFTPClient
+import net.schmizz.sshj.transport.verification.HostKeyVerifier
 import org.apache.commons.net.ftp.FTP
 import org.apache.commons.net.ftp.FTPClient
 import org.apache.commons.net.ftp.FTPReply
@@ -123,16 +124,18 @@ object RemoteClient {
         // TOFU: pin the first observed public key; reject subsequent key changes.
         val hostId = "${server.host}:${server.port}"
         val fingerprints = context.getSharedPreferences("sftp_fingerprints", Context.MODE_PRIVATE)
-        client.addHostKeyVerifier { _, _, key ->
-            val fingerprint = Base64.encodeToString(
-                MessageDigest.getInstance("SHA-256").digest(key.getEncoded()), Base64.NO_WRAP
-            )
-            val pinned = fingerprints.getString(hostId, null)
-            when {
-                pinned == null -> fingerprints.edit().putString(hostId, fingerprint).commit()
-                else -> pinned == fingerprint
+        client.addHostKeyVerifier(object : HostKeyVerifier {
+            override fun verify(hostname: String, port: Int, key: java.security.PublicKey): Boolean {
+                val encoded = key.getEncoded() ?: return false
+                val fingerprint = Base64.encodeToString(
+                    MessageDigest.getInstance("SHA-256").digest(encoded), Base64.NO_WRAP
+                )
+                val pinned = fingerprints.getString(hostId, null)
+                return if (pinned == null) fingerprints.edit().putString(hostId, fingerprint).commit()
+                    else pinned == fingerprint
             }
-        }
+            override fun findExistingAlgorithms(hostname: String, port: Int): List<String> = emptyList()
+        })
         try {
             client.connect(server.host.trim(), server.port)
             client.authPassword(server.username, server.password)
