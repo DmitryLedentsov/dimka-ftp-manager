@@ -7,7 +7,12 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
+
+# Only the newest master build should replace the rolling APK.
+concurrency:
+  group: android-apk-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -36,3 +41,22 @@ jobs:
           path: app/build/outputs/apk/debug/app-debug.apk
           retention-days: 30
           if-no-files-found: error
+      - name: Publish standalone APK to GitHub Releases
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp app/build/outputs/apk/debug/app-debug.apk DimkaFtpManager.apk
+          DESCRIPTION="Latest successful debug APK from commit ${GITHUB_SHA}. Build ${GITHUB_RUN_NUMBER}. For testing; not Play Store-signed."
+          if gh release view android-latest >/dev/null 2>&1; then
+            gh release upload android-latest DimkaFtpManager.apk --clobber
+            gh release edit android-latest --notes "$DESCRIPTION"
+          else
+            gh release create android-latest DimkaFtpManager.apk \\
+              --target "$GITHUB_SHA" \\
+              --title "DimkaFtpManager — latest APK" \\
+              --notes "$DESCRIPTION" \\
+              --latest
+          fi
+          echo "Direct APK: https://github.com/${GITHUB_REPOSITORY}/releases/download/android-latest/DimkaFtpManager.apk" >> "$GITHUB_STEP_SUMMARY"
+
