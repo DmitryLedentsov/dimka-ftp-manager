@@ -126,7 +126,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun MainScreen(vm: MainViewModel, syncVm: SyncViewModel) {
     var tab by remember { mutableIntStateOf(0) }
-    val tabs = listOf("FTP", "GitHub", "Задания", "Настройки")
+    val tabs = listOf("FTP", "Связи", "Задания", "Настройки")
     val icons = listOf(Icons.Default.Folder, Icons.Default.Code, Icons.Default.History, Icons.Default.Settings)
     Scaffold(
         topBar = {

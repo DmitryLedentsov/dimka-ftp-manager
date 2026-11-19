@@ -2,15 +2,18 @@
 
 Native, local-first Android FTP / FTPS / SFTP + GitHub file deployment tool. No server or DPM required.
 
-## Functions (v0.3.1)
+## Functions (v0.4.0)
 
 - Save and test multiple FTP/FTPS/SFTP connections, navigate remote folders.
 - Import FileZilla Site Manager XML on Android with a confirmation preview. Duplicate connections are merged by protocol, host, port, and username. Matching saved servers keep their IDs, names, root paths, and any passwords missing from the XML. Conflicting passwords in duplicate XML entries are reported in the preview; the last nonblank value wins. Implicit FTPS is also supported. The XML is never uploaded anywhere.
 - Download remote file to `Downloads/DimkaFtpManager/Exports` or archive a folder as ZIP.
 - Pick a file or ZIP in Android's document picker and upload it to the selected remote directory/file.
 - Before replacement, back up existing remote files to `Downloads/DimkaFtpManager/Backups`.
-- Connect GitHub with a fine-grained personal access token, browse repository files, choose files and deploy them to a configured server root.
-- First import from server to a GitHub repository with ignore rules and a preview, creating a single Git commit.
+- Create any number of named **GitHub ↔ FTP mappings**. Each mapping independently chooses GitHub repository/branch/file or folder, and FTP/FTPS/SFTP host/file or folder.
+- Two manual directions: **GitHub → FTP** (with backup ZIP before overwrites) and **FTP → GitHub** (one Git commit for the selected files).
+- File-to-file and folder-to-folder mappings only. Folder contents keep their relative paths even when GitHub and FTP have different parent directories. No delete mirroring.
+- Before either operation, the app previews the number and sample paths of existing/new target files. This compares path existence, not hashes/content. It is not a full merge conflict detector.
+- Legacy importer API remains in the code, but the primary GitHub screen now manages the saved mappings.
 - Transfers run in Android WorkManager with a foreground notification and progress; failed jobs are visible in the history and can be restarted from the source action. Re-running retries at file level rather than resuming an arbitrary FTP stream byte-for-byte.
 
 ## GitHub authentication
@@ -23,9 +26,11 @@ Import requires an existing repository; for empty repositories, the app creates 
 
 OAuth Client ID is a public identifier. Do not put a Client Secret in the Android project. GitHub sign-in has not yet been tested on a physical device.
 
-## Remote paths
+## Mappings and remote paths
 
-Each saved server has a **root path** (e.g. `/public_html`) used as the upload target for GitHub project files. The manual FTP browser is scoped to that root. Only add servers and repositories that you own or have permission to maintain.
+In the **Связи** tab, tap **Добавить**, then select **GitHub → repository → file/folder** and **FTP → saved host → file/folder**. Rename the mapping if helpful. Tap either arrow to preview the planned file replacements and confirm the operation.
+
+Each mapping has its own GitHub repository, default branch, path, FTP host and target path; there is no global repository-to-website pairing. Each saved server still has a root path (e.g. `/public_html`), and mapping selection is restricted to that root. Only connect servers and repositories you own or are authorized to maintain.
 
 ## Build
 
