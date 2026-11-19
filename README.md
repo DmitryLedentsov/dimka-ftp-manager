@@ -2,9 +2,10 @@
 
 Native, local-first Android FTP / FTPS / SFTP + GitHub file deployment tool. No server or DPM required.
 
-## Functions (v0.1)
+## Functions (v0.3)
 
 - Save and test multiple FTP/FTPS/SFTP connections, navigate remote folders.
+- Import FileZilla Site Manager XML on Android with a confirmation preview. Duplicate connections are merged by protocol, host, port, and username. Matching saved servers keep their IDs, names, root paths, and any passwords missing from the XML. The XML is never uploaded anywhere.
 - Download remote file to `Downloads/DimkaFtpManager/Exports` or archive a folder as ZIP.
 - Pick a file or ZIP in Android's document picker and upload it to the selected remote directory/file.
 - Before replacement, back up existing remote files to `Downloads/DimkaFtpManager/Backups`.
@@ -30,7 +31,11 @@ Each saved server has a **root path** (e.g. `/public_html`) used as the upload t
 
 Android Studio: open repository, sync Gradle, run **app**. JDK 17, Android SDK 35.
 
-GitHub: **Actions → Android APK → latest successful run → Artifacts → DimkaFtpManager-debug-apk**. The workflow runs on pushes to `master` and can be triggered manually.
+**Direct APK:** https://github.com/DmitryLedentsov/dimka-ftp-manager/releases/download/android-latest/DimkaFtpManager.apk (published after a successful `master` build).
+
+GitHub: **Releases → DimkaFtpManager — latest APK → Assets → DimkaFtpManager.apk**. This is a standalone APK file, not an artifact ZIP. The workflow also saves its original ZIP artifact under Actions, and can be triggered manually.
+
+In **Settings → FTP / FTPS / SFTP → Import sites from FileZilla (XML)** select the Site Manager export (including nested folders). The app shows a dry-run summary, then applies only on confirmation. FileZilla export password values are merely base64-encoded, so treat the XML itself as sensitive and never commit it to Git.
 
 CI uses Gradle installed by `gradle/actions/setup-gradle`, so no untracked binary wrapper JAR is needed.
 
@@ -40,4 +45,4 @@ CI uses Gradle installed by `gradle/actions/setup-gradle`, so no untracked binar
 - GitHub import/commit supports source files up to 20 MiB each and rejects files matching sensitive patterns. Inspect import preview and ignore rules before confirmation. It does not guarantee detection of every secret.
 - FTP is unencrypted; use FTPS or SFTP wherever available.
 - Transfers can be interrupted by Android process restrictions; operations show failed status, and you can safely run them again.
-- The debug APK is not signed for Play Store distribution; it uses the Android debug key for manual installation.
+- The debug APK is not signed for Play Store distribution; it uses the Android debug key for manual installation. Its signing key can vary across GitHub Actions runners; if Android rejects an update due to conflicting signatures, uninstall the old debug APK (this erases app data).
