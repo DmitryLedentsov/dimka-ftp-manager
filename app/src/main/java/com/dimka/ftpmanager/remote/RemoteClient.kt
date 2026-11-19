@@ -125,7 +125,7 @@ object RemoteClient {
         val fingerprints = context.getSharedPreferences("sftp_fingerprints", Context.MODE_PRIVATE)
         client.addHostKeyVerifier { _, _, key ->
             val fingerprint = Base64.encodeToString(
-                MessageDigest.getInstance("SHA-256").digest(key.encoded), Base64.NO_WRAP
+                MessageDigest.getInstance("SHA-256").digest(key.getEncoded()), Base64.NO_WRAP
             )
             val pinned = fingerprints.getString(hostId, null)
             when {
