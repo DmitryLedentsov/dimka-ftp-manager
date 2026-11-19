@@ -9,7 +9,7 @@ data class ServerProfile(
     val name: String,
     val protocol: String = "FTP",
     val host: String,
-    val port: Int = if (protocol == "SFTP") 22 else if (protocol == "FTPS") 21 else 21,
+    val port: Int = if (protocol == "SFTP") 22 else if (protocol == "FTPS_IMPLICIT") 990 else 21,
     val username: String,
     val password: String,
     val root: String = "/"
