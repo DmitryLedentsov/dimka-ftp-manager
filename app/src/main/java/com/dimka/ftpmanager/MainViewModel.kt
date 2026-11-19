@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import com.dimka.ftpmanager.data.ImportFilter
+import com.dimka.ftpmanager.data.FileZillaImporter
 import com.dimka.ftpmanager.data.ImportSummary
 import com.dimka.ftpmanager.data.RemoteEntry
 import com.dimka.ftpmanager.data.RepoEntry
@@ -63,6 +64,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var importSummary by mutableStateOf<ImportSummary?>(null)
         private set
+    var fileZillaPlan by mutableStateOf<FileZillaImporter.Plan?>(null)
+        private set
     var isLoading by mutableStateOf(false)
         private set
     var message by mutableStateOf<String?>(null)
@@ -74,6 +77,49 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun dismissMessage() { message = null }
     fun showMessage(value: String) { message = value }
+
+    /** Parses the selected XML locally. The preview has no effect until confirmed. */
+    fun previewFileZilla(uri: Uri) {
+        viewModelScope.launch {
+            isLoading = true
+            fileZillaPlan = null
+            try {
+                val plan = withContext(Dispatchers.IO) {
+                    val source = getApplication<Application>().contentResolver.openInputStream(uri)
+                        ?: error("Не удалось открыть XML")
+                    val parsed = FileZillaImporter.parse(source)
+                    FileZillaImporter.plan(servers, parsed)
+                }
+                fileZillaPlan = plan
+            } catch (e: Exception) {
+                message = "Импорт FileZilla: " + (e.message ?: "ошибка чтения XML")
+            } finally {
+                isLoading = false
+            }
+        }
+    }
+
+    fun confirmFileZillaImport() {
+        val plan = fileZillaPlan ?: return
+        try {
+            settings.saveServers(plan.profiles)
+            servers = plan.profiles
+            if (selectedServerId == null && servers.isNotEmpty()) {
+                selectedServerId = servers.first().id
+                folder = servers.first().root
+                entries = emptyList()
+                selectedEntry = null
+            }
+            fileZillaPlan = null
+            message = "FileZilla: добавлено ${plan.added}, обновлено ${plan.updated}, без изменений ${plan.unchanged}"
+        } catch (e: Exception) {
+            message = "Не удалось сохранить импорт: " + (e.message ?: "ошибка")
+        }
+    }
+
+    fun cancelFileZillaImport() {
+        fileZillaPlan = null
+    }
 
     fun upsertServer(profile: ServerProfile) {
         val updated = servers.filterNot { it.id == profile.id } + profile
