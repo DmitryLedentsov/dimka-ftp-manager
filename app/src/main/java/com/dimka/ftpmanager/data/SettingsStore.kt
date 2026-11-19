@@ -17,7 +17,8 @@ import javax.crypto.spec.GCMParameterSpec
 
 /** Keeps credentials out of plain SharedPreferences and of backup/restore images. */
 class SettingsStore(context: Context) {
-    private val prefs = context.applicationContext.getSharedPreferences("dimka_config", Context.MODE_PRIVATE)
+    private val appContext = context.applicationContext
+    private val prefs = appContext.getSharedPreferences("dimka_config", Context.MODE_PRIVATE)
     private val alias = "dimka_ftp_manager_config"
 
     private fun key(): SecretKey {
@@ -52,6 +53,56 @@ class SettingsStore(context: Context) {
 
     private fun put(name: String, value: String) {
         check(prefs.edit().putString(name, encrypt(value)).commit()) { "Failed to save settings" }
+    }
+
+    /**
+     * Export ALL saved settings, including FTP passwords, PAT, OAuth refresh token and
+     * pinned SFTP keys. The resulting JSON is plaintext by explicit user request.
+     * Unlike normal getters, an unreadable encrypted value aborts the export.
+     */
+    fun exportFullConfig(): String {
+        fun requireDecrypted(name: String, fallback: String): String =
+            prefs.getString(name, null)?.let(::decrypt) ?: fallback
+        val pins = appContext.getSharedPreferences("sftp_fingerprints", Context.MODE_PRIVATE)
+            .all.mapNotNull { (name, value) ->
+                (value as? String)?.let { name to it }
+            }.toMap()
+        return FullConfigBackup(
+            serversJson = requireDecrypted("servers", "[]"),
+            mappingsJson = requireDecrypted("sync_mappings", "[]"),
+            statusesJson = requireDecrypted("sync_checks", "[]"),
+            repoJson = requireDecrypted("repo", RepoSettings().toJson().toString()),
+            oauthJson = prefs.getString("oauth", null)?.let(::decrypt),
+            fingerprints = pins
+        ).toJson()
+    }
+
+    /**
+     * Validate first using FullConfigBackup.parse(), then atomically replace all
+     * encrypted SharedPreferences keys. Android Keystore stays local to this device;
+     * only the decrypted configuration travels inside the exported JSON.
+     */
+    fun importFullConfig(backup: FullConfigBackup) {
+        val protected = mapOf(
+            "servers" to encrypt(backup.serversJson),
+            "sync_mappings" to encrypt(backup.mappingsJson),
+            "sync_checks" to encrypt(backup.statusesJson),
+            "repo" to encrypt(backup.repoJson)
+        )
+        val oauthEncrypted = backup.oauthJson?.let(::encrypt)
+        val editor = prefs.edit()
+        protected.forEach { (name, value) -> editor.putString(name, value) }
+        if (oauthEncrypted == null) editor.remove("oauth")
+        else editor.putString("oauth", oauthEncrypted)
+        check(editor.commit()) { "Не удалось записать настройки Android" }
+
+        val fingerprintEditor = appContext.getSharedPreferences(
+            "sftp_fingerprints", Context.MODE_PRIVATE
+        ).edit().clear()
+        backup.fingerprints.forEach { (name, value) ->
+            fingerprintEditor.putString(name, value)
+        }
+        check(fingerprintEditor.commit()) { "Не удалось восстановить SFTP-отпечатки" }
     }
 
     fun checkStatuses(): Map<String, CheckStatus> = checkStatusFromJson(get("sync_checks", "[]"))
