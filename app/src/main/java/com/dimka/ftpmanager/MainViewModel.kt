@@ -14,12 +14,16 @@ import com.dimka.ftpmanager.data.RepoSettings
 import com.dimka.ftpmanager.data.ServerProfile
 import com.dimka.ftpmanager.data.SettingsStore
 import com.dimka.ftpmanager.github.GitHubClient
+import com.dimka.ftpmanager.github.GitHubOAuth
 import com.dimka.ftpmanager.remote.RemoteClient
 import com.dimka.ftpmanager.remote.cleanRemotePath
 import com.dimka.ftpmanager.remote.isWithinRoot
 import com.dimka.ftpmanager.transfer.FileOperations
 import com.dimka.ftpmanager.transfer.TransferWorker
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -33,6 +37,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var repo by mutableStateOf(settings.repo())
         private set
+    var oauthSession by mutableStateOf(settings.oauth())
+        private set
+    var deviceAuthorization by mutableStateOf<GitHubOAuth.DeviceCode?>(null)
+        private set
+    var oauthBusy by mutableStateOf(false)
+        private set
+    var oauthStatus by mutableStateOf("")
+        private set
+    var availableRepositories by mutableStateOf<List<String>>(emptyList())
+        private set
+    private var oauthJob: Job? = null
+    val hasGithubCredential get() = oauthSession != null || repo.token.isNotBlank()
     var selectedServerId by mutableStateOf(servers.firstOrNull()?.id)
         private set
     var folder by mutableStateOf(servers.firstOrNull()?.root ?: "/")
@@ -78,6 +94,103 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (changed) { repositoryEntries = emptyList(); selectedRepoPaths = emptySet() }
         message = "GitHub-настройки сохранены"
     }
+
+    fun startGithubLogin() {
+        if (oauthBusy) return
+        oauthJob = viewModelScope.launch {
+            oauthBusy = true
+            oauthStatus = "Запрашиваем код у GitHub…"
+            deviceAuthorization = null
+            try {
+                val authorization = withContext(Dispatchers.IO) { GitHubOAuth.requestDeviceCode() }
+                deviceAuthorization = authorization
+                oauthStatus = "Открой GitHub, введи код и подтверди доступ"
+                val deadline = System.currentTimeMillis() + authorization.expiresIn * 1000L
+                var interval = authorization.interval
+                while (System.currentTimeMillis() < deadline) {
+                    delay(interval * 1000L)
+                    val response = withContext(Dispatchers.IO) { GitHubOAuth.poll(authorization.code) }
+                    when (val errorCode = response.optString("error")) {
+                        "" -> {
+                            val token = response.optString("access_token")
+                            if (token.isBlank()) throw IllegalStateException("GitHub не вернул токен")
+                            val login = withContext(Dispatchers.IO) { GitHubOAuth.login(token) }
+                            val session = GitHubOAuth.sessionFrom(response, login)
+                            withContext(Dispatchers.IO) { settings.saveOAuth(session) }
+                            oauthSession = session
+                            oauthStatus = "GitHub подключён: @" + login
+                            loadRepositories()
+                            return@launch
+                        }
+                        "authorization_pending" -> Unit
+                        "slow_down" -> interval = maxOf(interval + 5L, response.optLong("interval", interval + 5L))
+                        "expired_token", "token_expired" -> throw IllegalStateException("Код GitHub истёк. Запусти вход снова.")
+                        "access_denied" -> throw IllegalStateException("Авторизация отклонена в GitHub")
+                        else -> throw IllegalStateException(response.optString("error_description", errorCode))
+                    }
+                }
+                throw IllegalStateException("Код GitHub истёк. Запусти вход снова.")
+            } catch (_: CancellationException) {
+                oauthStatus = "Авторизация отменена"
+            } catch (e: Exception) {
+                oauthStatus = e.message ?: "Не удалось подключить GitHub"
+            } finally {
+                deviceAuthorization = null
+                oauthBusy = false
+            }
+        }
+    }
+
+    fun cancelGithubLogin() {
+        oauthJob?.cancel()
+        deviceAuthorization = null
+        oauthBusy = false
+        oauthStatus = "Авторизация отменена"
+    }
+
+    fun logoutGithub() {
+        cancelGithubLogin()
+        settings.clearOAuth()
+        oauthSession = null
+        availableRepositories = emptyList()
+        oauthStatus = if (repo.token.isNotBlank()) "OAuth отключён. Доступен ручной PAT." else "GitHub отключён"
+    }
+
+    fun loadRepositories() {
+        if (!hasGithubCredential) { oauthStatus = "Сначала подключи GitHub"; return }
+        viewModelScope.launch {
+            isLoading = true
+            try {
+                val result = withContext(Dispatchers.IO) {
+                    GitHubClient(GitHubOAuth.accessToken(getApplication())).repositories()
+                }
+                availableRepositories = result
+                if (result.isEmpty()) oauthStatus = "Репозитории не найдены"
+            } catch (e: Exception) {
+                oauthStatus = "Не удалось загрузить репозитории: " + (e.message ?: "ошибка")
+            } finally {
+                isLoading = false
+            }
+        }
+    }
+
+    fun chooseRepository(name: String) {
+        viewModelScope.launch {
+            isLoading = true
+            try {
+                val branch = withContext(Dispatchers.IO) {
+                    GitHubClient(GitHubOAuth.accessToken(getApplication())).verify(name)
+                }
+                saveRepo(repo.copy(repository = name, branch = branch))
+                oauthStatus = "Выбран репозиторий " + name
+            } catch (e: Exception) {
+                oauthStatus = "Не удалось выбрать репозиторий: " + (e.message ?: "ошибка")
+            } finally {
+                isLoading = false
+            }
+        }
+    }
+
     fun selectServer(id: String?) {
         selectedServerId = id
         folder = server?.root?.let(::cleanRemotePath) ?: "/"
@@ -132,7 +245,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             isLoading = true
             try {
                 repositoryEntries = withContext(Dispatchers.IO) {
-                    GitHubClient(current.token).tree(current.repository, current.branch)
+                    GitHubClient(GitHubOAuth.accessToken(getApplication())).tree(current.repository, current.branch)
                 }
                 selectedRepoPaths = emptySet()
             } catch (e: Exception) { message = "GitHub: ${e.message}" }
@@ -181,8 +294,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (selectedRepoPaths.size > 80) { message = "За один деплой выбери не более 80 файлов"; return }
             pairs.add(TransferWorker.SELECTED to JSONArray(selectedRepoPaths.sorted()).toString())
         }
-        if (action in setOf(TransferWorker.IMPORT, TransferWorker.DEPLOY) && repo.token.isBlank()) {
-            message = "GitHub Token нужно указать в настройках"; return
+        if (action in setOf(TransferWorker.IMPORT, TransferWorker.DEPLOY) && !hasGithubCredential) {
+            message = "Сначала войди в GitHub или укажи PAT в настройках"; return
         }
         try {
             val request = OneTimeWorkRequestBuilder<TransferWorker>()
