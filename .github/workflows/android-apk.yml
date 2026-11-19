@@ -52,11 +52,7 @@ jobs:
             gh release upload android-latest DimkaFtpManager.apk --clobber
             gh release edit android-latest --notes "$DESCRIPTION"
           else
-            gh release create android-latest DimkaFtpManager.apk \\
-              --target "$GITHUB_SHA" \\
-              --title "DimkaFtpManager — latest APK" \\
-              --notes "$DESCRIPTION" \\
-              --latest
+            gh release create android-latest DimkaFtpManager.apk --target "$GITHUB_SHA" --title "DimkaFtpManager — latest APK" --notes "$DESCRIPTION" --latest
           fi
           echo "Direct APK: https://github.com/${GITHUB_REPOSITORY}/releases/download/android-latest/DimkaFtpManager.apk" >> "$GITHUB_STEP_SUMMARY"
 
