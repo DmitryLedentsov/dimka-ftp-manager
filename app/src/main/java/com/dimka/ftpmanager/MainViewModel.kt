@@ -14,6 +14,7 @@ import com.dimka.ftpmanager.data.RepoEntry
 import com.dimka.ftpmanager.data.RepoSettings
 import com.dimka.ftpmanager.data.ServerProfile
 import com.dimka.ftpmanager.data.SettingsStore
+import com.dimka.ftpmanager.data.FullConfigBackup
 import com.dimka.ftpmanager.github.GitHubClient
 import com.dimka.ftpmanager.github.GitHubOAuth
 import com.dimka.ftpmanager.remote.RemoteClient
@@ -71,12 +72,112 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var message by mutableStateOf<String?>(null)
         private set
 
+    /** Sensitive JSON stays in private ViewModel state until the user confirms import. */
+    var pendingConfigImport by mutableStateOf<FullConfigBackup?>(null)
+        private set
+
     val server get() = servers.firstOrNull { it.id == selectedServerId }
 
     init { if (selectedServerId != null) refreshFiles() }
 
     fun dismissMessage() { message = null }
     fun showMessage(value: String) { message = value }
+
+    fun exportFullConfig(uri: Uri) {
+        if (isLoading) return
+        viewModelScope.launch {
+            isLoading = true
+            try {
+                withContext(Dispatchers.IO) {
+                    val exported = settings.exportFullConfig()
+                    val provider = getApplication<Application>().contentResolver
+                    provider.openOutputStream(uri, "wt")?.use { out ->
+                        out.write(exported.toByteArray(Charsets.UTF_8))
+                        out.flush()
+                    } ?: error("Не удалось открыть файл для записи")
+                }
+                message = "Полный экспорт готов. JSON содержит ВСЕ пароли и токены открытым текстом. Храни файл приватно."
+            } catch (e: Exception) {
+                message = "Экспорт: " + (e.message ?: "неизвестная ошибка")
+            } finally {
+                isLoading = false
+            }
+        }
+    }
+
+    fun previewFullConfigImport(uri: Uri) {
+        if (isLoading) return
+        pendingConfigImport = null
+        viewModelScope.launch {
+            isLoading = true
+            try {
+                val parsed = withContext(Dispatchers.IO) {
+                    val input = getApplication<Application>().contentResolver.openInputStream(uri)
+                        ?: error("Не удалось открыть JSON")
+                    val content = input.use { stream ->
+                        val output = java.io.ByteArrayOutputStream()
+                        val buffer = ByteArray(32 * 1024)
+                        while (true) {
+                            val read = stream.read(buffer)
+                            if (read < 0) break
+                            check(output.size() + read <= FullConfigBackup.MAX_JSON_BYTES) {
+                                "Файл больше 16 МиБ"
+                            }
+                            output.write(buffer, 0, read)
+                        }
+                        output.toString("UTF-8")
+                    }
+                    FullConfigBackup.parse(content)
+                }
+                pendingConfigImport = parsed
+            } catch (e: Exception) {
+                message = "Импорт: " + (e.message ?: "ошибка чтения конфигурации")
+            } finally {
+                isLoading = false
+            }
+        }
+    }
+
+    fun cancelFullConfigImport() { pendingConfigImport = null }
+
+    fun confirmFullConfigImport(onImported: () -> Unit) {
+        val backup = pendingConfigImport ?: return
+        if (isLoading) return
+        viewModelScope.launch {
+            isLoading = true
+            try {
+                // Avoid a running GitHub device flow replacing the imported session.
+                cancelGithubLogin()
+                withContext(Dispatchers.IO) { settings.importFullConfig(backup) }
+                val oldId = selectedServerId
+                servers = settings.servers()
+                repo = settings.repo()
+                oauthSession = settings.oauth()
+                selectedServerId = oldId?.takeIf { id -> servers.any { it.id == id } }
+                    ?: servers.firstOrNull()?.id
+                folder = server?.root?.let(::cleanRemotePath) ?: "/"
+                entries = emptyList()
+                selectedEntry = null
+                repositoryEntries = emptyList()
+                selectedRepoPaths = emptySet()
+                availableRepositories = emptyList()
+                oauthStatus = if (oauthSession != null)
+                    "GitHub подключён: @" + oauthSession!!.login
+                else "Авторизация GitHub восстановлена из PAT или отсутствует"
+                fileZillaPlan = null
+                importSummary = null
+                pendingConfigImport = null
+                onImported()
+                if (server != null) refreshFiles()
+                message = "Конфигурация восстановлена: " + backup.serverCount +
+                    " хостов и " + backup.mappingCount + " синхронизаций."
+            } catch (e: Exception) {
+                message = "Ошибка импорта: " + (e.message ?: "не удалось восстановить")
+            } finally {
+                isLoading = false
+            }
+        }
+    }
 
     /** Parses the selected XML locally. The preview has no effect until confirmed. */
     fun previewFileZilla(uri: Uri) {
