@@ -4,6 +4,7 @@ import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
+import com.dimka.ftpmanager.github.GitHubOAuth
 import org.json.JSONObject
 import java.security.KeyStore
 import javax.crypto.Cipher
@@ -54,4 +55,9 @@ class SettingsStore(context: Context) {
     fun saveServers(items: List<ServerProfile>) = put("servers", items.toJsonString())
     fun repo(): RepoSettings = runCatching { RepoSettings.fromJson(JSONObject(get("repo", "{}"))) }.getOrDefault(RepoSettings())
     fun saveRepo(value: RepoSettings) = put("repo", value.toJson().toString())
+    fun oauth(): GitHubOAuth.Session? = runCatching {
+        GitHubOAuth.Session.fromJson(JSONObject(get("oauth", "{}")))
+    }.getOrNull()
+    fun saveOAuth(session: GitHubOAuth.Session) = put("oauth", session.toJson().toString())
+    fun clearOAuth() { check(prefs.edit().remove("oauth").commit()) { "Failed to clear GitHub session" } }
 }
