@@ -16,13 +16,18 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.HelpOutline
 import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -41,142 +46,112 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.dimka.ftpmanager.data.CheckStatus
+import com.dimka.ftpmanager.data.ComparedFile
+import com.dimka.ftpmanager.data.FileDifference
 import com.dimka.ftpmanager.data.SyncDirection
 import com.dimka.ftpmanager.data.SyncMapping
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+private fun formattedTime(value: Long): String = if (value <= 0L) "ещё не было"
+    else SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()).format(Date(value))
 
 @Composable
 fun SyncMappingsScreen(vm: SyncViewModel) {
     var rename by remember { mutableStateOf<SyncMapping?>(null) }
     var delete by remember { mutableStateOf<SyncMapping?>(null) }
-    var editedName by remember { mutableStateOf("") }
+    var newName by remember { mutableStateOf("") }
+    val active = vm.mappings.firstOrNull { it.id == vm.activeId }
 
-    Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text("Синхронизации", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                Text("Сохранённые соответствия GitHub ↔ FTP",
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            Button(onClick = vm::addMapping) {
-                Icon(Icons.Default.Add, contentDescription = null)
-                Text("Добавить")
-            }
-        }
-        if (vm.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
-        if (vm.mappings.isEmpty()) {
-            OutlinedCard(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("Пока нет соответствий", fontWeight = FontWeight.SemiBold)
-                    Text("Создай задачу, выбери файл или папку на GitHub и FTP, затем запускай перенос в нужную сторону.",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Button(onClick = vm::addMapping) { Text("Новое соответствие") }
-                }
-            }
-        } else {
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                items(vm.mappings, key = { it.id }) { mapping ->
-                    OutlinedCard(Modifier.fillMaxWidth()) {
-                        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(mapping.name, modifier = Modifier.weight(1f),
-                                    style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                                TextButton(onClick = {
-                                    editedName = mapping.name
-                                    rename = mapping
-                                }) { Text("Имя") }
-                                IconButton(onClick = { delete = mapping }) {
-                                    Icon(Icons.Default.Delete, "Удалить соответствие")
-                                }
-                            }
-                            EndpointBlock(
-                                title = "GitHub",
-                                location = if (mapping.githubPicked)
-                                    mapping.repository + " · " + mapping.branch else "Репозиторий не выбран",
-                                path = if (mapping.githubPicked)
-                                    (if (mapping.githubDirectory) "📁 " else "📄 ") +
-                                        mapping.githubPath.ifBlank { "/" } else "Выбрать файл или папку",
-                                onChoose = { vm.beginGithub(mapping.id) }
-                            )
-                            EndpointBlock(
-                                title = "FTP / FTPS / SFTP",
-                                location = vm.servers.firstOrNull { it.id == mapping.serverId }
-                                    ?.let { it.name + " · " + it.protocol } ?: "Хост не выбран",
-                                path = if (mapping.ftpPicked)
-                                    (if (mapping.ftpDirectory) "📁 " else "📄 ") + mapping.ftpPath
-                                    else "Выбрать файл или папку",
-                                onChoose = { vm.beginFtp(mapping.id) }
-                            )
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Button(
-                                    onClick = { vm.prepareSync(mapping.id, SyncDirection.GITHUB_TO_FTP) },
-                                    enabled = mapping.ready && !vm.loading,
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Icon(Icons.Default.ArrowDownward, null)
-                                    Text("GitHub → FTP", fontSize = 12.sp)
-                                }
-                                OutlinedButton(
-                                    onClick = { vm.prepareSync(mapping.id, SyncDirection.FTP_TO_GITHUB) },
-                                    enabled = mapping.ready && !vm.loading,
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Icon(Icons.Default.ArrowUpward, null)
-                                    Text("FTP → GitHub", fontSize = 12.sp)
-                                }
-                            }
-                            Text("Только добавление/замена файлов. Удалений нет. FTP-перезапись с бэкапом.",
-                                fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    }
-                }
-            }
-        }
+    if (active == null) {
+        SyncList(vm)
+    } else {
+        SyncDetail(vm, active, onRename = {
+            newName = active.name
+            rename = active
+        }, onDelete = { delete = active })
     }
 
     rename?.let { mapping ->
-        AlertDialog(
-            onDismissRequest = { rename = null },
+        AlertDialog(onDismissRequest = { rename = null },
             title = { Text("Название соответствия") },
-            text = { OutlinedTextField(value = editedName, onValueChange = { editedName = it },
-                singleLine = true, modifier = Modifier.fillMaxWidth(), label = { Text("Название") }) },
-            confirmButton = { Button(enabled = editedName.isNotBlank(), onClick = {
-                vm.renameMapping(mapping.id, editedName); rename = null
+            text = {
+                OutlinedTextField(newName, onValueChange = { newName = it },
+                    label = { Text("Название") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            },
+            confirmButton = { Button(enabled = newName.isNotBlank(), onClick = {
+                vm.renameMapping(mapping.id, newName)
+                rename = null
             }) { Text("Сохранить") } },
-            dismissButton = { TextButton(onClick = { rename = null }) { Text("Отмена") } }
-        )
+            dismissButton = { TextButton(onClick = { rename = null }) { Text("Отмена") } })
     }
     delete?.let { mapping ->
         AlertDialog(onDismissRequest = { delete = null },
             title = { Text("Удалить соответствие?") },
-            text = { Text(mapping.name + ". Файлы на GitHub и FTP не затрагиваются.") },
-            confirmButton = { Button(onClick = { vm.deleteMapping(mapping.id); delete = null }) {
-                Text("Удалить")
-            } },
+            text = { Text("Удалится только связь «" + mapping.name +
+                "». Содержимое FTP и GitHub не затрагивается.") },
+            confirmButton = { Button(onClick = {
+                vm.deleteMapping(mapping.id)
+                vm.closeMapping()
+                delete = null
+            }) { Text("Удалить") } },
             dismissButton = { TextButton(onClick = { delete = null }) { Text("Отмена") } })
     }
     if (vm.picker != null) MappingPickerDialog(vm)
     vm.preview?.let { state ->
-        AlertDialog(
-            onDismissRequest = vm::cancelPreview,
+        AlertDialog(onDismissRequest = vm::cancelPreview,
             title = { Text(if (state.direction == SyncDirection.GITHUB_TO_FTP)
                 "GitHub → FTP" else "FTP → GitHub") },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                    Text("Передать файлов: " + state.count, fontWeight = FontWeight.SemiBold)
-                    Text("Добавить: " + state.willAdd + " · Перезаписать: " + state.willReplace)
-                    Text("Предварительный список путей:", fontSize = 12.sp)
-                    state.sample.forEach { Text(it, fontSize = 11.sp) }
-                    Text("Это сравнение наличия путей, а не содержимого. За время между просмотром и запуском файлы могли измениться. Отсутствующие в источнике файлы не удаляются.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("К передаче: " + state.count + " файлов", fontWeight = FontWeight.SemiBold)
+                    Text("Новых: " + state.willAdd + " · Перезаписать: " + state.willReplace)
+                    state.sample.forEach { Text(it, fontSize = 12.sp) }
+                    Text("Только выбранные файлы, проверенные по содержимому. Перед записью версии повторно проверяются. Никаких удалений.",
+                        style = MaterialTheme.typography.bodySmall)
                 }
             },
-            confirmButton = { Button(onClick = vm::confirmSync) { Text("Начать перенос") } },
-            dismissButton = { TextButton(onClick = vm::cancelPreview) { Text("Отмена") } }
-        )
+            confirmButton = { Button(onClick = vm::confirmSync) { Text("Перенести") } },
+            dismissButton = { TextButton(onClick = vm::cancelPreview) { Text("Отмена") } })
+    }
+    vm.diffFile?.let { file ->
+        AlertDialog(onDismissRequest = vm::closeDiff,
+            title = { Text("Diff · " + file.relative, maxLines = 2) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Красный — FTP · зелёный — GitHub. Сравнение не меняет файлы.",
+                        fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (vm.diffBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
+                    val result = vm.diffResult
+                    if (result != null) {
+                        if (result.explanation.isNotBlank())
+                            Text(result.explanation, color = MaterialTheme.colorScheme.error)
+                        else {
+                            Text("GitHub: +" + result.added + " · FTP: −" + result.removed, fontSize = 12.sp)
+                            LazyColumn(Modifier.heightIn(max = 440.dp)) {
+                                items(result.lines) { line ->
+                                    val tint = when (line.marker) {
+                                        "+" -> Color(0xFF14834C)
+                                        "-" -> MaterialTheme.colorScheme.error
+                                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                    }
+                                    Text(line.marker + " " + (if (line.oldLine > 0) line.oldLine.toString() else "") +
+                                        ":" + (if (line.newLine > 0) line.newLine.toString() else "") + " " + line.content,
+                                        color = tint, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = vm::closeDiff) { Text("Закрыть") } })
     }
     vm.message?.let { msg ->
         AlertDialog(onDismissRequest = vm::dismissMessage,
@@ -187,9 +162,228 @@ fun SyncMappingsScreen(vm: SyncViewModel) {
 }
 
 @Composable
+private fun SyncList(vm: SyncViewModel) {
+    Column(Modifier.fillMaxSize().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Синхронизации", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                Text(vm.mappings.size.toString() + " сохранённых соответствий",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            OutlinedButton(onClick = vm::checkAll, enabled = !vm.loading && vm.mappings.any { it.ready }) {
+                Icon(Icons.Default.Refresh, null); Text("Все")
+            }
+            Button(onClick = vm::addMapping, enabled = !vm.loading) {
+                Icon(Icons.Default.Add, null); Text("Новая")
+            }
+        }
+        if (vm.loading) {
+            LinearProgressIndicator(Modifier.fillMaxWidth())
+            if (vm.checkProgress.isNotBlank()) Text(vm.checkProgress, fontSize = 12.sp)
+        }
+        if (vm.mappings.isEmpty()) {
+            OutlinedCard(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("Пока нет связей", fontWeight = FontWeight.SemiBold)
+                    Text("Создай соответствие GitHub ↔ FTP. Здесь будут статусы и даты последней проверки.",
+                        style = MaterialTheme.typography.bodySmall)
+                    Button(onClick = vm::addMapping) { Text("Создать") }
+                }
+            }
+        }
+        LazyColumn(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+            items(vm.mappings, key = { it.id }) { mapping ->
+                val check = vm.statuses[mapping.id]
+                OutlinedCard(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(11.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                        Row(Modifier.fillMaxWidth().clickable { vm.openMapping(mapping.id) },
+                            verticalAlignment = Alignment.CenterVertically) {
+                            SyncStatusIcon(check)
+                            Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
+                                Text(mapping.name, maxLines = 1, fontWeight = FontWeight.SemiBold)
+                                Text(mapping.repository.ifBlank { "GitHub не выбран" } +
+                                    " ↔ " + (vm.servers.firstOrNull { it.id == mapping.serverId }?.name
+                                        ?: "FTP не выбран"), fontSize = 11.sp, maxLines = 1,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text((if (mapping.githubDirectory) "📁 " else "📄 ") + mapping.githubPath.ifBlank { "/" } +
+                                    " ↔ " + mapping.ftpPath.ifBlank { "/" }, fontSize = 11.sp,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                            Text("›", fontSize = 24.sp)
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text(statusLabel(check), fontSize = 12.sp)
+                                Text("Проверка: " + formattedTime(check?.checkedAt ?: 0L),
+                                    fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                if ((check?.syncedAt ?: 0L) > 0L)
+                                    Text("Перенос: " + formattedTime(check!!.syncedAt), fontSize = 10.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            OutlinedButton(onClick = { vm.checkMapping(mapping.id) },
+                                enabled = mapping.ready && !vm.loading) {
+                                Icon(Icons.Default.Refresh, null)
+                                Text(if (vm.checkingId == mapping.id) "…" else "Проверить")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SyncStatusIcon(check: CheckStatus?) {
+    when (check?.status) {
+        "MATCH" -> Icon(Icons.Default.CheckCircle, "Совпадает", tint = Color(0xFF15803D))
+        "CHANGED" -> Icon(Icons.Default.Warning, "Различия", tint = Color(0xFFC08415))
+        "ERROR" -> Icon(Icons.Default.ErrorOutline, "Ошибка", tint = MaterialTheme.colorScheme.error)
+        "WARNING" -> Icon(Icons.Default.Warning, "Есть неподдерживаемые файлы", tint = Color(0xFFC08415))
+        else -> Icon(Icons.Default.HelpOutline, "Не проверено", tint = MaterialTheme.colorScheme.outline)
+    }
+}
+
+private fun statusLabel(check: CheckStatus?): String = when (check?.status) {
+    "MATCH" -> "✓ Совпадает · " + check.matching + " файлов"
+    "CHANGED" -> "Есть различия · " + check.changed + " файлов"
+    "WARNING" -> "Есть различия или файлы больше лимита"
+    "ERROR" -> "Ошибка: " + check.error
+    else -> "Не проверено / требуется повторная проверка"
+}
+
+@Composable
+private fun SyncDetail(vm: SyncViewModel, mapping: SyncMapping, onRename: () -> Unit,
+                       onDelete: () -> Unit) {
+    val check = vm.statuses[mapping.id]
+    val snapshot = vm.comparison?.takeIf { it.mapping == mapping }
+    val diffFiles = snapshot?.files?.filter { it.difference != FileDifference.IDENTICAL }.orEmpty()
+    val permitted = diffFiles.filter { it.difference != FileDifference.TOO_LARGE }
+    LazyColumn(Modifier.fillMaxSize().padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        item {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = vm::closeMapping) {
+                    Icon(Icons.Default.ArrowBack, null); Text("Назад")
+                }
+                Text(mapping.name, modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.titleMedium, maxLines = 2)
+                TextButton(onClick = onRename) { Text("Имя") }
+                IconButton(onClick = onDelete) { Icon(Icons.Default.Delete, "Удалить") }
+            }
+        }
+        item {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                SyncStatusIcon(check)
+                Column(Modifier.padding(start = 10.dp)) {
+                    Text(statusLabel(check))
+                    Text("Последняя проверка: " + formattedTime(check?.checkedAt ?: 0L),
+                        fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Последняя передача: " + formattedTime(check?.syncedAt ?: 0L),
+                        fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+        item {
+            EndpointBlock("GitHub", if (mapping.githubPicked)
+                mapping.repository + " · " + mapping.branch else "Репозиторий не выбран",
+                if (mapping.githubPicked) (if (mapping.githubDirectory) "📁 " else "📄 ") +
+                    mapping.githubPath.ifBlank { "/" } else "Файл/папка не выбраны",
+                onChoose = { vm.beginGithub(mapping.id) })
+        }
+        item {
+            EndpointBlock("FTP / FTPS / SFTP",
+                vm.servers.firstOrNull { it.id == mapping.serverId }?.let {
+                    it.name + " · " + it.protocol
+                } ?: "Хост не выбран",
+                if (mapping.ftpPicked) (if (mapping.ftpDirectory) "📁 " else "📄 ") +
+                    mapping.ftpPath else "Файл/папка не выбраны",
+                onChoose = { vm.beginFtp(mapping.id) })
+        }
+        item {
+            Button(onClick = { vm.checkMapping(mapping.id) }, enabled = mapping.ready && !vm.loading,
+                modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Default.Refresh, null); Text("Diff Check · Сравнить")
+            }
+            if (vm.loading) {
+                LinearProgressIndicator(Modifier.fillMaxWidth())
+                Text(vm.checkProgress, fontSize = 11.sp)
+            }
+        }
+        if (snapshot != null) {
+            item {
+                Text("Результат: совпадают " + snapshot.matching + " · отличаются " +
+                    snapshot.changes + (if (snapshot.blocked > 0) " · превышен лимит " +
+                        snapshot.blocked else ""), fontWeight = FontWeight.SemiBold)
+                Text("FTP и GitHub сравниваются по содержимому. Неизменённые файлы передаваться не будут.",
+                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (permitted.isNotEmpty()) Row {
+                    TextButton(onClick = { vm.setAllFiles(true) }) { Text("Выбрать все") }
+                    TextButton(onClick = { vm.setAllFiles(false) }) { Text("Снять выбор") }
+                }
+                HorizontalDivider()
+            }
+            items(diffFiles, key = { it.relative }) { file ->
+                Row(Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = file.relative in vm.selectedPaths,
+                        enabled = file.difference != FileDifference.TOO_LARGE,
+                        onCheckedChange = { vm.toggleFile(file.relative) })
+                    Column(Modifier.weight(1f)) {
+                        Text(file.relative, fontSize = 12.sp, maxLines = 2)
+                        Text(when (file.difference) {
+                            FileDifference.CHANGED -> "Изменён"
+                            FileDifference.ONLY_GITHUB -> "Только в GitHub"
+                            FileDifference.ONLY_FTP -> "Только на FTP"
+                            FileDifference.TOO_LARGE -> "Файл больше 20 МиБ · пропущен"
+                            else -> "Совпадает"
+                        }, fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    OutlinedButton(onClick = { vm.openDiff(file) },
+                        enabled = !vm.loading && file.difference != FileDifference.TOO_LARGE) {
+                        Text("Diff")
+                    }
+                }
+                HorizontalDivider()
+            }
+            if (diffFiles.isEmpty()) item {
+                Text("✓ Все файлы совпадают. Передавать ничего не требуется.",
+                    color = Color(0xFF15803D))
+            }
+            item {
+                val transferEnabled = vm.selectedPaths.isNotEmpty() && !vm.loading
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(modifier = Modifier.weight(1f),
+                        enabled = transferEnabled && permitted.any {
+                            it.relative in vm.selectedPaths && it.githubSha.isNotBlank()
+                        },
+                        onClick = { vm.prepareSync(mapping.id, SyncDirection.GITHUB_TO_FTP) }) {
+                        Icon(Icons.Default.ArrowDownward, null)
+                        Text("GitHub → FTP", fontSize = 12.sp)
+                    }
+                    OutlinedButton(modifier = Modifier.weight(1f),
+                        enabled = transferEnabled && permitted.any {
+                            it.relative in vm.selectedPaths && it.ftpSha.isNotBlank()
+                        },
+                        onClick = { vm.prepareSync(mapping.id, SyncDirection.FTP_TO_GITHUB) }) {
+                        Icon(Icons.Default.ArrowUpward, null)
+                        Text("FTP → GitHub", fontSize = 12.sp)
+                    }
+                }
+                Text("Только отмеченные и реально отличающиеся файлы. Отсутствующие в источнике файлы не удаляются.",
+                    fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        } else item {
+            Text("Нажми Diff Check для построчного сравнения и выбора файлов к передаче.",
+                style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
+@Composable
 private fun EndpointBlock(title: String, location: String, path: String, onChoose: () -> Unit) {
     Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(title, fontWeight = FontWeight.SemiBold)
             Text(location, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(path, maxLines = 3, overflow = TextOverflow.Ellipsis, fontSize = 12.sp)
