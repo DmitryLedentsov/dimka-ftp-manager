@@ -58,6 +58,12 @@ class GitHubClient(private val token: String) {
             .sortedBy { it.path.lowercase() }
     }
 
+    /** First page of accessible repositories, newest first. */
+    fun repositories(): List<String> {
+        val array = JSONArray(String(api("GET", "/user/repos?per_page=100&sort=updated"), Charsets.UTF_8))
+        return (0 until array.length()).map { array.getJSONObject(it).getString("full_name") }
+    }
+
     fun download(repo: String, branch: String, path: String, output: File) {
         require(path.isNotBlank() && !path.startsWith('/') && path.split('/').none { it == ".." })
         val encoded = Uri.encode(path, "/")
