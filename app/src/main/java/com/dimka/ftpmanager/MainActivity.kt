@@ -103,6 +103,7 @@ import java.util.Locale
 
 class MainActivity : ComponentActivity() {
     private val vm by viewModels<MainViewModel>()
+    private val syncVm by viewModels<SyncViewModel>()
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
@@ -116,14 +117,14 @@ class MainActivity : ComponentActivity() {
                     background = Color(0xFF0E1525),
                     surface = Color(0xFF18243A)
                 )
-            ) { MainScreen(vm) }
+            ) { MainScreen(vm, syncVm) }
         }
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun MainScreen(vm: MainViewModel) {
+private fun MainScreen(vm: MainViewModel, syncVm: SyncViewModel) {
     var tab by remember { mutableIntStateOf(0) }
     val tabs = listOf("FTP", "GitHub", "Задания", "Настройки")
     val icons = listOf(Icons.Default.Folder, Icons.Default.Code, Icons.Default.History, Icons.Default.Settings)
@@ -153,7 +154,7 @@ private fun MainScreen(vm: MainViewModel) {
         Box(Modifier.fillMaxSize().padding(padding)) {
             when (tab) {
                 0 -> FtpScreen(vm)
-                1 -> GitHubScreen(vm)
+                1 -> SyncMappingsScreen(syncVm)
                 2 -> JobsScreen()
                 3 -> SettingsScreen(vm)
             }
@@ -352,63 +353,6 @@ private fun FtpScreen(vm: MainViewModel) {
         }
         Text("Архив распакуется на телефоне; совпадающие файлы заменятся, остальные останутся. Старые версии → Downloads/DimkaFtpManager/Backups.",
             fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
-}
-
-@Composable
-private fun GitHubScreen(vm: MainViewModel) {
-    var search by remember { mutableStateOf("") }
-    Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        PageTitle("GitHub → FTP", "Деплой выбранных файлов или первый импорт сайта")
-        ServerChooser(vm)
-        OutlinedCard(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(vm.repo.repository.ifEmpty { "Репозиторий не задан" }, fontWeight = FontWeight.SemiBold)
-                Text("Ветка: ${vm.repo.branch} · Настроить можно во вкладке «Настройки»", fontSize = 12.sp)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = vm::loadRepo, enabled = !vm.isLoading && vm.repo.repository.isNotBlank()) { Text("Файлы GitHub") }
-                    Button(onClick = vm::prepareImport, enabled = !vm.isLoading && vm.server != null && vm.hasGithubCredential) {
-                        Text("FTP → GitHub")
-                    }
-                }
-            }
-        }
-        if (vm.isLoading) LinearProgressIndicator(Modifier.fillMaxWidth())
-        if (vm.repositoryEntries.isNotEmpty()) {
-            OutlinedTextField(value = search, onValueChange = { search = it }, modifier = Modifier.fillMaxWidth(),
-                label = { Text("Фильтр по пути") }, singleLine = true)
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text("Выбрано: ${vm.selectedRepoPaths.size}", modifier = Modifier.weight(1f))
-                TextButton(onClick = { vm.repositoryEntries.forEach { if (it.path in vm.selectedRepoPaths) vm.toggleRepoPath(it.path) } }) {
-                    Text("Сбросить")
-                }
-            }
-            LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                items(vm.repositoryEntries.filter { search.isBlank() || it.path.contains(search, ignoreCase = true) }, key = { it.path }) { entry ->
-                    Row(Modifier.fillMaxWidth().clickable { vm.toggleRepoPath(entry.path) }.padding(vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically) {
-                        RadioButton(selected = entry.path in vm.selectedRepoPaths, onClick = { vm.toggleRepoPath(entry.path) })
-                        Column(Modifier.weight(1f)) {
-                            Text(entry.path, fontSize = 12.sp, maxLines = 2)
-                            Text(humanSize(entry.size), fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    }
-                    HorizontalDivider()
-                }
-            }
-            Button(modifier = Modifier.fillMaxWidth(), enabled = vm.selectedRepoPaths.isNotEmpty() && vm.server != null,
-                onClick = { vm.enqueue(TransferWorker.DEPLOY, vm.server?.root ?: "/") }) {
-                Icon(Icons.Default.CloudUpload, null); Spacer(Modifier.size(8.dp)); Text("Деплой выбранных файлов")
-            }
-        } else {
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Icon(Icons.Default.Info, null)
-                    Text("Выбери сервер и подключи GitHub через вход в браузере или PAT. Репозиторий можно выбрать в настройках. Перед первым импортом увидишь количество файлов и фильтры.")
-                }
-            }
-            Spacer(Modifier.weight(1f))
-        }
     }
 }
 

@@ -5,6 +5,9 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import com.dimka.ftpmanager.github.GitHubOAuth
+import com.dimka.ftpmanager.data.SyncMapping
+import com.dimka.ftpmanager.data.parseMappings
+import com.dimka.ftpmanager.data.toMappingsJson
 import org.json.JSONObject
 import java.security.KeyStore
 import javax.crypto.Cipher
@@ -51,6 +54,8 @@ class SettingsStore(context: Context) {
         check(prefs.edit().putString(name, encrypt(value)).commit()) { "Failed to save settings" }
     }
 
+    fun mappings(): List<SyncMapping> = parseMappings(get("sync_mappings", "[]"))
+    fun saveMappings(items: List<SyncMapping>) = put("sync_mappings", items.toMappingsJson())
     fun servers(): List<ServerProfile> = parseServers(get("servers", "[]"))
     fun saveServers(items: List<ServerProfile>) = put("servers", items.toJsonString())
     fun repo(): RepoSettings = runCatching { RepoSettings.fromJson(JSONObject(get("repo", "{}"))) }.getOrDefault(RepoSettings())

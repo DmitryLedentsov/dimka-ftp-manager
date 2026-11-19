@@ -116,6 +116,38 @@ class GitHubClient(private val token: String) {
         }
     }
 
+    /** Commit only selected mapped files. No deletion or .gitignore rewrite. */
+    fun commitFiles(
+        repo: String, branch: String, files: List<Pair<String, File>>,
+        message: String, progress: (Int, Int) -> Unit = { _, _ -> }
+    ): String {
+        require(token.isNotBlank()) { "GitHub authorization required" }
+        require(files.isNotEmpty()) { "No files selected" }
+        require(files.map { it.first }.distinct().size == files.size) { "Duplicate target paths" }
+        val (head, baseTree) = branchHead(repo, branch)
+        val entries = JSONArray()
+        files.forEachIndexed { index, (path, source) ->
+            require(path.isNotBlank() && !path.startsWith('/') &&
+                path.split('/').none { it.isBlank() || it == "." || it == ".." }) {
+                "Invalid GitHub destination: " + path
+            }
+            val sha = blob(repo, source)
+            entries.put(JSONObject().put("path", path).put("mode", "100644")
+                .put("type", "blob").put("sha", sha))
+            progress(index + 1, files.size + 1)
+        }
+        val tree = obj("POST", "${repoPath(repo)}/git/trees",
+            JSONObject().put("base_tree", baseTree).put("tree", entries)).getString("sha")
+        val commit = obj("POST", "${repoPath(repo)}/git/commits",
+            JSONObject().put("message", message.take(160))
+                .put("tree", tree).put("parents", JSONArray().put(head))).getString("sha")
+        // A concurrent branch update fails safely as a non-fast-forward.
+        obj("PATCH", "${repoPath(repo)}/git/refs/heads/${ref(branch)}",
+            JSONObject().put("sha", commit).put("force", false))
+        progress(files.size + 1, files.size + 1)
+        return commit
+    }
+
     /** One Git commit for every imported source tree. Existing repo content is preserved. */
     fun commitImport(
         repo: String, branch: String, files: List<Pair<String, File>>, ignore: String,
