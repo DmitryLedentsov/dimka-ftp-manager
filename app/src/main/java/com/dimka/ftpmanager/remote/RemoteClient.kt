@@ -51,13 +51,13 @@ interface RemoteSession : AutoCloseable {
 
 object RemoteClient {
     fun connect(context: Context, server: ServerProfile): RemoteSession = when (server.protocol.uppercase(Locale.US)) {
-        "FTP", "FTPS" -> ftp(server)
+        "FTP", "FTPS", "FTPS_IMPLICIT" -> ftp(server)
         "SFTP" -> sftp(context.applicationContext, server)
         else -> error("Unsupported protocol: ${server.protocol}")
     }
 
     private fun ftp(server: ServerProfile): RemoteSession {
-        val client: FTPClient = if (server.protocol.uppercase(Locale.US) == "FTPS") FTPSClient(false).apply {
+        val client: FTPClient = if (server.protocol.uppercase(Locale.US).startsWith("FTPS")) FTPSClient(server.protocol.uppercase(Locale.US) == "FTPS_IMPLICIT").apply {
             setEndpointCheckingEnabled(true)
         } else FTPClient()
         client.controlEncoding = "UTF-8"
