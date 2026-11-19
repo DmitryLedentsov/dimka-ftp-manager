@@ -41,6 +41,19 @@ data class ComparedFile(
     }
 }
 
+/** Selection is a one-time operation: a button, not a persisted "inverted" mode. */
+object SyncFileSelection {
+    fun selectable(files: List<ComparedFile>): Set<String> =
+        files.filter {
+            it.difference == FileDifference.CHANGED ||
+                it.difference == FileDifference.ONLY_GITHUB ||
+                it.difference == FileDifference.ONLY_FTP
+        }.map { it.relative }.toSet()
+
+    fun invert(files: List<ComparedFile>, current: Set<String>): Set<String> =
+        selectable(files) - current
+}
+
 data class MappingComparison(
     val mapping: SyncMapping,
     val checkedAt: Long,

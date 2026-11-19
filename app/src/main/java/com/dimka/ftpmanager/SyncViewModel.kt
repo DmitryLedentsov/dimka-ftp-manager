@@ -13,6 +13,8 @@ import com.dimka.ftpmanager.data.ServerProfile
 import com.dimka.ftpmanager.data.SettingsStore
 import com.dimka.ftpmanager.data.SyncDirection
 import com.dimka.ftpmanager.data.SyncMapping
+import com.dimka.ftpmanager.data.FolderCompareMode
+import com.dimka.ftpmanager.data.SyncFileSelection
 import com.dimka.ftpmanager.data.SyncPaths
 import com.dimka.ftpmanager.data.SyncPreview
 import com.dimka.ftpmanager.data.MappingComparison
@@ -105,18 +107,19 @@ class SyncViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun recordCheck(id: String, result: MappingComparison) {
         val old = store.checkStatuses()[id] ?: CheckStatus(id)
-        val state = if (result.blocked > 0) "WARNING" else if (result.synchronized) "MATCH" else "CHANGED"
+        val state = when {
+            result.files.isEmpty() -> "EMPTY"
+            result.blocked > 0 -> "WARNING"
+            result.synchronized -> "MATCH"
+            else -> "CHANGED"
+        }
         val newStatus = old.copy(status = state, checkedAt = result.checkedAt,
             matching = result.matching, changed = result.changes, error = "")
         store.updateCheckStatus(id) { newStatus }
         statuses = store.checkStatuses()
         if (activeId == id) {
             comparison = result
-            selectedPaths = result.files.filter {
-                it.difference == FileDifference.CHANGED ||
-                    it.difference == FileDifference.ONLY_GITHUB ||
-                    it.difference == FileDifference.ONLY_FTP
-            }.map { it.relative }.toSet()
+            selectedPaths = SyncFileSelection.selectable(result.files)
         }
     }
     private fun checkError(id: String, error: Exception) {
@@ -186,14 +189,23 @@ class SyncViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
     fun toggleFile(relative: String) {
+        val check = comparison ?: return
+        if (relative !in SyncFileSelection.selectable(check.files)) return
         selectedPaths = if (relative in selectedPaths) selectedPaths - relative else selectedPaths + relative
     }
     fun setAllFiles(value: Boolean) {
         val check = comparison ?: return
-        selectedPaths = if (value) check.files.filter {
-            it.difference in setOf(FileDifference.CHANGED,
-                FileDifference.ONLY_GITHUB, FileDifference.ONLY_FTP)
-        }.map { it.relative }.toSet() else emptySet()
+        selectedPaths = if (value) SyncFileSelection.selectable(check.files) else emptySet()
+    }
+    fun invertSelectedFiles() {
+        val check = comparison ?: return
+        selectedPaths = SyncFileSelection.invert(check.files, selectedPaths)
+    }
+    fun setCompareMode(id: String, mode: FolderCompareMode) {
+        if (loading || checkAllRunning) return
+        val mapping = mappings.firstOrNull { it.id == id } ?: return
+        if (!mapping.githubDirectory || !mapping.ftpDirectory || mapping.compareMode == mode) return
+        replace(id) { it.copy(compareMode = mode) }
     }
     fun openDiff(file: ComparedFile) {
         val checked = comparison ?: return

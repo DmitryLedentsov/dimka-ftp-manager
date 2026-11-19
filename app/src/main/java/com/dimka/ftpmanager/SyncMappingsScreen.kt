@@ -36,6 +36,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -60,11 +61,18 @@ import androidx.compose.ui.unit.sp
 import com.dimka.ftpmanager.data.CheckStatus
 import com.dimka.ftpmanager.data.ComparedFile
 import com.dimka.ftpmanager.data.FileDifference
+import com.dimka.ftpmanager.data.FolderCompareMode
 import com.dimka.ftpmanager.data.SyncDirection
 import com.dimka.ftpmanager.data.SyncMapping
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+
+private fun folderModeName(mode: FolderCompareMode): String = when (mode) {
+    FolderCompareMode.ALL -> "Все файлы"
+    FolderCompareMode.COMMON_ONLY -> "Только общие"
+    FolderCompareMode.COMMON_AND_GITHUB -> "Общие + новые из GitHub"
+}
 
 private fun formattedTime(value: Long): String = if (value <= 0L) "ещё не было"
     else SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()).format(Date(value))
@@ -218,6 +226,10 @@ private fun SyncList(vm: SyncViewModel) {
                                     " ↔ " + (vm.servers.firstOrNull { it.id == mapping.serverId }?.name
                                         ?: "FTP не выбран"), fontSize = 11.sp, maxLines = 1,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                if (mapping.githubDirectory)
+                                    Text("Режим: " + folderModeName(mapping.compareMode),
+                                        fontSize = 10.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 Text((if (mapping.githubDirectory) "📁 " else "📄 ") + mapping.githubPath.ifBlank { "/" } +
                                     " ↔ " + mapping.ftpPath.ifBlank { "/" }, fontSize = 11.sp,
                                     maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -251,6 +263,8 @@ private fun SyncStatusIcon(check: CheckStatus?) {
     when (check?.status) {
         "MATCH" -> Icon(Icons.Default.CheckCircle, "Совпадает", tint = Color(0xFF15803D))
         "CHANGED" -> Icon(Icons.Default.Warning, "Различия", tint = Color(0xFFC08415))
+        "EMPTY" -> Icon(Icons.Default.HelpOutline, "Нет файлов для сравнения",
+            tint = MaterialTheme.colorScheme.outline)
         "ERROR" -> Icon(Icons.Default.ErrorOutline, "Ошибка", tint = MaterialTheme.colorScheme.error)
         "WARNING" -> Icon(Icons.Default.Warning, "Есть неподдерживаемые файлы", tint = Color(0xFFC08415))
         else -> Icon(Icons.Default.HelpOutline, "Не проверено", tint = MaterialTheme.colorScheme.outline)
@@ -260,6 +274,7 @@ private fun SyncStatusIcon(check: CheckStatus?) {
 private fun statusLabel(check: CheckStatus?): String = when (check?.status) {
     "MATCH" -> "✓ Совпадает · " + check.matching + " файлов"
     "CHANGED" -> "Есть различия · " + check.changed + " файлов"
+    "EMPTY" -> "Нет файлов в выбранном режиме"
     "WARNING" -> "Есть различия или файлы больше лимита"
     "ERROR" -> "Ошибка: " + check.error
     else -> "Не проверено / требуется повторная проверка"
@@ -312,6 +327,29 @@ private fun SyncDetail(vm: SyncViewModel, mapping: SyncMapping, onRename: () -> 
                     mapping.ftpPath else "Файл/папка не выбраны",
                 onChoose = { vm.beginFtp(mapping.id) })
         }
+        if (mapping.githubDirectory && mapping.ftpDirectory) item {
+            OutlinedCard(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                    Text("Режим сравнения папок", fontWeight = FontWeight.SemiBold)
+                    FolderCompareMode.entries.forEach { mode ->
+                        Row(Modifier.fillMaxWidth().clickable(enabled = !vm.loading) {
+                            vm.setCompareMode(mapping.id, mode)
+                        }, verticalAlignment = Alignment.CenterVertically) {
+                            RadioButton(selected = mapping.compareMode == mode,
+                                enabled = !vm.loading,
+                                onClick = { vm.setCompareMode(mapping.id, mode) })
+                            Text(folderModeName(mode), style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                    Text("«Все» — обе стороны. «Только общие» — пересечение. «Общие + новые из GitHub» — все файлы GitHub, включая отсутствующие на FTP, но без FTP-only.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Режим сохраняется для этой связи. После переключения потребуется новая проверка.",
+                        fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
         item {
             Button(onClick = { vm.checkMapping(mapping.id) }, enabled = mapping.ready && !vm.loading,
                 modifier = Modifier.fillMaxWidth()) {
@@ -332,6 +370,11 @@ private fun SyncDetail(vm: SyncViewModel, mapping: SyncMapping, onRename: () -> 
                 if (permitted.isNotEmpty()) Row {
                     TextButton(onClick = { vm.setAllFiles(true) }) { Text("Выбрать все") }
                     TextButton(onClick = { vm.setAllFiles(false) }) { Text("Снять выбор") }
+                    TextButton(onClick = vm::invertSelectedFiles) { Text("Инвертировать") }
+                }
+                if (permitted.isNotEmpty()) {
+                    Text("Выбрано " + vm.selectedPaths.size + " из " + permitted.size + " файлов",
+                        style = MaterialTheme.typography.bodySmall)
                 }
                 HorizontalDivider()
             }
@@ -360,8 +403,10 @@ private fun SyncDetail(vm: SyncViewModel, mapping: SyncMapping, onRename: () -> 
                 HorizontalDivider()
             }
             if (diffFiles.isEmpty()) item {
-                Text("✓ Все файлы совпадают. Передавать ничего не требуется.",
-                    color = Color(0xFF15803D))
+                Text(if (snapshot.files.isEmpty()) "Нет файлов для сравнения в выбранном режиме."
+                    else "✓ Все файлы совпадают. Передавать ничего не требуется.",
+                    color = if (snapshot.files.isEmpty())
+                        MaterialTheme.colorScheme.onSurfaceVariant else Color(0xFF15803D))
             }
             item {
                 val transferEnabled = vm.selectedPaths.isNotEmpty() && !vm.loading

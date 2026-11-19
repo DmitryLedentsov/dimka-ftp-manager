@@ -19,7 +19,8 @@ data class SyncMapping(
     val serverId: String = "",
     val ftpPath: String = "",
     val ftpDirectory: Boolean = true,
-    val ftpPicked: Boolean = false
+    val ftpPicked: Boolean = false,
+    val compareMode: FolderCompareMode = FolderCompareMode.ALL
 ) {
     val ready: Boolean get() = repository.isNotBlank() && branch.isNotBlank() &&
         serverId.isNotBlank() && githubPicked && ftpPicked &&
@@ -34,6 +35,7 @@ data class SyncMapping(
         put("githubPicked", githubPicked); put("serverId", serverId)
         put("ftpPath", ftpPath); put("ftpDirectory", ftpDirectory)
         put("ftpPicked", ftpPicked)
+        put("compareMode", compareMode.name)
     }
 
     companion object {
@@ -44,8 +46,27 @@ data class SyncMapping(
             githubPath = o.optString("githubPath"), githubDirectory = o.optBoolean("githubDirectory", true),
             githubPicked = o.optBoolean("githubPicked"), serverId = o.optString("serverId"),
             ftpPath = o.optString("ftpPath"), ftpDirectory = o.optBoolean("ftpDirectory", true),
-            ftpPicked = o.optBoolean("ftpPicked")
+            ftpPicked = o.optBoolean("ftpPicked"),
+            compareMode = runCatching {
+                FolderCompareMode.valueOf(o.optString("compareMode", FolderCompareMode.ALL.name))
+            }.getOrDefault(FolderCompareMode.ALL)
         )
+    }
+}
+
+/**
+ * The three folder comparison modes. Single-file mappings ignore this choice.
+ * Filtering happens BEFORE downloading/hashing remote files, not merely in the UI.
+ */
+enum class FolderCompareMode {
+    ALL,
+    COMMON_ONLY,
+    COMMON_AND_GITHUB;
+
+    fun paths(github: Set<String>, ftp: Set<String>): List<String> = when (this) {
+        ALL -> (github + ftp).sorted()
+        COMMON_ONLY -> github.intersect(ftp).sorted()
+        COMMON_AND_GITHUB -> github.sorted()
     }
 }
 

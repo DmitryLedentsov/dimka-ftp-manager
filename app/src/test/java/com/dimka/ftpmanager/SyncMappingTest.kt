@@ -1,6 +1,10 @@
 package com.dimka.ftpmanager
 
 import com.dimka.ftpmanager.data.SyncMapping
+import com.dimka.ftpmanager.data.FolderCompareMode
+import com.dimka.ftpmanager.data.SyncFileSelection
+import com.dimka.ftpmanager.data.ComparedFile
+import com.dimka.ftpmanager.data.FileDifference
 import com.dimka.ftpmanager.data.SyncPaths
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -9,6 +13,44 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SyncMappingTest {
+    @Test fun folderModesSelectTheRightSideOfTheUnion() {
+        val git = setOf("same.php", "git/new.php", "assets/banner.webp")
+        val ftp = setOf("same.php", "ftp/old.php", "cache/image.png")
+        assertEquals(
+            listOf("assets/banner.webp", "cache/image.png", "ftp/old.php", "git/new.php", "same.php"),
+            FolderCompareMode.ALL.paths(git, ftp)
+        )
+        assertEquals(listOf("same.php"), FolderCompareMode.COMMON_ONLY.paths(git, ftp))
+        assertEquals(listOf("assets/banner.webp", "git/new.php", "same.php"),
+            FolderCompareMode.COMMON_AND_GITHUB.paths(git, ftp))
+        assertTrue(FolderCompareMode.COMMON_ONLY.paths(git, emptySet()).isEmpty())
+        assertTrue(FolderCompareMode.COMMON_AND_GITHUB.paths(emptySet(), ftp).isEmpty())
+    }
+
+    @Test fun invertSelectionIsOneShotAndSkipsIdenticalOrOversized() {
+        val files = listOf(
+            ComparedFile("a.php", "a.php", "/a.php", FileDifference.CHANGED),
+            ComparedFile("b.php", "b.php", "/b.php", FileDifference.ONLY_GITHUB),
+            ComparedFile("c.png", "c.png", "/c.png", FileDifference.ONLY_FTP),
+            ComparedFile("same.php", "same.php", "/same.php", FileDifference.IDENTICAL),
+            ComparedFile("huge.bin", "huge.bin", "/huge.bin", FileDifference.TOO_LARGE)
+        )
+        val all = SyncFileSelection.selectable(files)
+        assertEquals(setOf("a.php", "b.php", "c.png"), all)
+        assertTrue(SyncFileSelection.invert(files, all).isEmpty())
+        assertEquals(all, SyncFileSelection.invert(files, emptySet()))
+        assertEquals(setOf("b.php", "c.png"),
+            SyncFileSelection.invert(files, setOf("a.php", "same.php")))
+    }
+
+    @Test fun modesDefaultToAllAndDoNotChangeFileMappings() {
+        val mapping = SyncMapping()
+        assertEquals(FolderCompareMode.ALL, mapping.compareMode)
+        assertEquals(listOf("@file"),
+            FolderCompareMode.COMMON_AND_GITHUB.paths(setOf("@file"), emptySet()))
+    }
+
+
     @Test fun directorySelectionPreservesRelativeStructure() {
         assertEquals("imshop.php", SyncPaths.relative("mg-plugins/imshop/imshop.php", "mg-plugins/imshop", true))
         assertEquals("nested/config.php", SyncPaths.relative("mg-plugins/imshop/nested/config.php", "mg-plugins/imshop", true))

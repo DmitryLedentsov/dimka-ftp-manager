@@ -58,3 +58,17 @@ CI uses Gradle installed by `gradle/actions/setup-gradle`, so no untracked binar
 - Source-only files on the opposite side are **not deleted**. Only checked changed/new files available in the chosen source direction are transferred. FTP uploads back up overwritten files to Downloads/DimkaFtpManager/Backups. FTP → GitHub produces a single commit with only selected files.
 - Before applying, WorkManager rechecks current files' hashes against the preview snapshot; FTP targets are also verified immediately before uploading. Changed GitHub blob IDs in target paths cause FTP → GitHub to abort. If files have changed between check and write, the job fails rather than silently overriding edits. FTP does not support atomic compare-and-swap, so a tiny last-moment concurrency window remains.
 - Checks can be slow for large folders: FTP requires reading each file to compare exact contents. No server-side daemon. Statuses and check/sync timestamps persist on-device. A sync marks status as needing a new check until Check is run again.
+
+## Folder comparison modes (v0.6)
+
+Each directory-to-directory mapping stores its own comparison mode:
+
+- **All files** (default): compare GitHub and FTP path union. Includes files only on one side.
+- **Common files only**: compare only paths present on both sides; all GitHub-only and FTP-only files are excluded from both Diff Check and transfers.
+- **Common + new from GitHub**: compare paths present on GitHub. Includes shared files plus GitHub-only files, while omitting FTP-only files. This is useful for production template deployments where the FTP directory contains media, cache or runtime files that are not in GitHub.
+
+Filtering is applied **before hashing and downloading FTP content**, not only in the UI. The directory trees still have to be listed to determine which paths exist. With file-to-file mappings the mode is irrelevant.
+
+A fresh Diff Check selects all eligible changes by default. Buttons **Select all**, **Clear selection**, and **Invert selection** work only on actionable differences; matching or oversized files are excluded. Inversion is a one-time action, not a persistent flag. A change to the mode invalidates the old check status and its selected-file snapshot, so the next transfer requires a fresh Diff Check.
+
+Transfers remain directional: with "Common + new from GitHub", a file that exists only on GitHub can be pushed to FTP but cannot be used as a source for FTP → GitHub.

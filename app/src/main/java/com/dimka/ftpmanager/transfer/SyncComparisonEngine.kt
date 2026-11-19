@@ -72,7 +72,9 @@ object SyncComparisonEngine {
                     ftpFiles["@file"] = FileOperations.RemoteFile(entry.path, entry.name, entry.size)
                 }
             }
-            val keys = (gitFiles.keys + ftpFiles.keys).distinct().sorted()
+            val keys = if (mapping.githubDirectory)
+                mapping.compareMode.paths(gitFiles.keys.toSet(), ftpFiles.keys.toSet())
+            else (gitFiles.keys + ftpFiles.keys).distinct().sorted()
             check(keys.size <= SyncPaths.MAX_FILES) {
                 "В папках " + keys.size + " файлов. Выбери папку поменьше (лимит " + SyncPaths.MAX_FILES + ")."
             }
