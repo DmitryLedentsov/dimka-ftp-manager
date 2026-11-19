@@ -20,7 +20,8 @@ data class SyncMapping(
     val ftpPath: String = "",
     val ftpDirectory: Boolean = true,
     val ftpPicked: Boolean = false,
-    val compareMode: FolderCompareMode = FolderCompareMode.ALL
+    val compareMode: FolderCompareMode = FolderCompareMode.ALL,
+    val scope: ComparisonScope = ComparisonScope()
 ) {
     val ready: Boolean get() = repository.isNotBlank() && branch.isNotBlank() &&
         serverId.isNotBlank() && githubPicked && ftpPicked &&
@@ -36,6 +37,7 @@ data class SyncMapping(
         put("ftpPath", ftpPath); put("ftpDirectory", ftpDirectory)
         put("ftpPicked", ftpPicked)
         put("compareMode", compareMode.name)
+        put("scope", scope.toJson())
     }
 
     companion object {
@@ -49,7 +51,9 @@ data class SyncMapping(
             ftpPicked = o.optBoolean("ftpPicked"),
             compareMode = runCatching {
                 FolderCompareMode.valueOf(o.optString("compareMode", FolderCompareMode.ALL.name))
-            }.getOrDefault(FolderCompareMode.ALL)
+            }.getOrDefault(FolderCompareMode.ALL),
+            scope = if (o.has("scope")) ComparisonScope.fromJson(o.getJSONArray("scope"))
+                else ComparisonScope()
         )
     }
 }
@@ -67,6 +71,91 @@ enum class FolderCompareMode {
         ALL -> (github + ftp).sorted()
         COMMON_ONLY -> github.intersect(ftp).sorted()
         COMMON_AND_GITHUB -> github.sorted()
+    }
+}
+
+
+/**
+ * Inclusion/exclusion rules for a mapping's RELATIVE paths.
+ *
+ * An empty rule set means "compare everything", preserving existing mappings.
+ * The most specific matching directory rule wins; exact file rules override their
+ * parent's directory rule. No external absolute paths or ".." segments are accepted.
+ */
+data class ScopeRule(val path: String, val directory: Boolean, val included: Boolean) {
+    init { ComparisonScope.validatePath(path, directory) }
+    fun toJson(): JSONObject = JSONObject().apply {
+        put("path", path)
+        put("directory", directory)
+        put("included", included)
+    }
+    companion object {
+        fun fromJson(obj: JSONObject): ScopeRule = ScopeRule(
+            obj.getString("path"),
+            obj.getBoolean("directory"),
+            obj.getBoolean("included")
+        )
+    }
+}
+
+data class ComparisonScope(val rules: List<ScopeRule> = emptyList()) {
+    init {
+        require(rules.size <= 3000) { "Слишком много правил выбора" }
+        require(rules.map { it.path }.distinct().size == rules.size) {
+            "Повторяющиеся правила выбора области"
+        }
+    }
+
+    val all: Boolean get() = rules.isEmpty()
+
+    /** A directory rule applies to the directory itself and all its descendants. */
+    fun isSelected(path: String, directory: Boolean): Boolean {
+        validatePath(path, directory)
+        return rules.filter { rule ->
+            (rule.directory && (rule.path.isEmpty() || path == rule.path ||
+                path.startsWith(rule.path + "/"))) ||
+                (!rule.directory && !directory && path == rule.path)
+        }.maxByOrNull { it.path.length }?.included ?: true
+    }
+
+    fun includesFile(path: String): Boolean = isSelected(path, false)
+
+    /**
+     * Prune excluded FTP folders before recursive scan. Enter an excluded folder
+     * only when a more specific include rule exists somewhere below it.
+     */
+    fun shouldTraverseDirectory(path: String): Boolean {
+        validatePath(path, true)
+        return isSelected(path, true) ||
+            rules.any { it.included && (path.isEmpty() || it.path.startsWith("$path/")) }
+    }
+
+    fun withSelection(path: String, directory: Boolean, include: Boolean): ComparisonScope {
+        validatePath(path, directory)
+        val remaining = rules.filterNot { rule ->
+            rule.path == path ||
+                (directory && (path.isEmpty() || rule.path.startsWith("$path/")))
+        }
+        if (path.isEmpty() && include) return ComparisonScope()
+        val parentDecision = ComparisonScope(remaining).isSelected(path, directory)
+        return ComparisonScope(if (parentDecision == include) remaining
+            else remaining + ScopeRule(path, directory, include))
+    }
+
+    fun toJson(): JSONArray = JSONArray().also { arr -> rules.forEach { arr.put(it.toJson()) } }
+
+    companion object {
+        fun validatePath(path: String, directory: Boolean) {
+            require(path.length <= 4096 && !path.startsWith('/') &&
+                !path.endsWith('/') && '\\' !in path && '\u0000' !in path &&
+                (path.isNotEmpty() || directory) &&
+                path.split('/').none { it == "." || it == ".." || (path.isNotEmpty() && it.isEmpty()) }
+            ) { "Небезопасный относительный путь: $path" }
+        }
+
+        fun fromJson(array: JSONArray): ComparisonScope = ComparisonScope(
+            (0 until array.length()).map { ScopeRule.fromJson(array.getJSONObject(it)) }
+        )
     }
 }
 

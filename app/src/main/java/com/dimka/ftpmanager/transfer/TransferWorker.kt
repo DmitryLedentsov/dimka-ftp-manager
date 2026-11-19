@@ -158,6 +158,9 @@ class TransferWorker(appContext: Context, params: WorkerParameters) : CoroutineW
                             "Selected file list is invalid"
                         }
                         check(chosen.size <= SyncPaths.MAX_FILES) { "Too many files in selection" }
+                        if (mapping.githubDirectory) check(chosen.all {
+                            mapping.scope.includesFile(it.relative)
+                        }) { "Selection outside the allowed comparison scope" }
                         check(chosen.none { it.difference == FileDifference.IDENTICAL ||
                             it.difference == FileDifference.TOO_LARGE }) {
                             "Selection includes identical or unsupported files"

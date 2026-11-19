@@ -6,6 +6,7 @@ import android.net.Uri
 import android.os.Environment
 import android.provider.MediaStore
 import com.dimka.ftpmanager.data.ImportFilter
+import com.dimka.ftpmanager.data.ComparisonScope
 import com.dimka.ftpmanager.remote.RemoteSession
 import com.dimka.ftpmanager.remote.cleanRemotePath
 import com.dimka.ftpmanager.remote.joinRemote
@@ -26,7 +27,7 @@ object FileOperations {
     /** Ignore directories before traversal, rather than downloading media and filtering later. */
     fun scan(
         session: RemoteSession, root: String, filter: ImportFilter? = null,
-        checkpoint: () -> Unit = {}
+        checkpoint: () -> Unit = {}, scope: ComparisonScope? = null
     ): Scanned {
         val normalizedRoot = cleanRemotePath(root)
         val files = ArrayList<RemoteFile>()
@@ -42,8 +43,13 @@ object FileOperations {
                 checkpoint()
                 val relative = if (relativeBase.isEmpty()) entry.name else "$relativeBase/${entry.name}"
                 if (filter?.excluded(relative, entry.directory) == true) { skipped++; continue }
-                if (entry.directory) pending.add(entry.path to relative)
-                else files.add(RemoteFile(entry.path, relative, entry.size))
+                if (entry.directory) {
+                    if (scope == null || scope.shouldTraverseDirectory(relative))
+                        pending.add(entry.path to relative)
+                    else skipped++
+                } else if (scope == null || scope.includesFile(relative)) {
+                    files.add(RemoteFile(entry.path, relative, entry.size))
+                } else skipped++
                 if (files.size > MAX_FILES) error("Too many files; choose a smaller directory")
             }
         }

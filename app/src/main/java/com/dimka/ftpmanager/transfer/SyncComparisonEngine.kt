@@ -55,12 +55,14 @@ object SyncComparisonEngine {
         val gitFiles = linkedMapOf<String, com.dimka.ftpmanager.data.RepoEntry>()
         for (entry in client.tree(mapping.repository, mapping.branch)) {
             val relative = SyncPaths.relative(entry.path, mapping.githubPath, mapping.githubDirectory)
-            if (relative != null) gitFiles[if (mapping.githubDirectory) relative else "@file"] = entry
+            if (relative != null && (!mapping.githubDirectory || mapping.scope.includesFile(relative)))
+                gitFiles[if (mapping.githubDirectory) relative else "@file"] = entry
         }
         val ftpFiles = linkedMapOf<String, FileOperations.RemoteFile>()
         RemoteClient.connect(context, server).use { ftp ->
             if (mapping.ftpDirectory) {
-                FileOperations.scan(ftp, mapping.ftpPath, checkpoint = checkpoint).files.forEach {
+                FileOperations.scan(ftp, mapping.ftpPath,
+                    checkpoint = checkpoint, scope = mapping.scope).files.forEach {
                     ftpFiles[it.relative] = it
                 }
             } else {
