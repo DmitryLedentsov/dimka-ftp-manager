@@ -161,7 +161,8 @@ object FileOperations {
     fun uploadWithBackup(
         context: Context, session: RemoteSession, destination: String,
         files: List<Pair<String, File>>, tempDir: File,
-        progress: (Int, Int) -> Unit, checkpoint: () -> Unit
+        progress: (Int, Int) -> Unit, checkpoint: () -> Unit,
+        expectedHashes: Map<String, String>? = null
     ): Uri? {
         val target = cleanRemotePath(destination)
         val backups = ArrayList<Pair<String, String>>()
@@ -191,6 +192,23 @@ object FileOperations {
         files.forEachIndexed { index, (relative, file) ->
             checkpoint()
             val remote = relative.split('/').fold(target) { path, part -> joinRemote(path, part) }
+            if (expectedHashes != null) {
+                val expected = expectedHashes[relative]
+                    ?: error("Missing expected destination checksum: $relative")
+                val exists = session.existsFile(remote)
+                check(exists == expected.isNotBlank()) {
+                    "Remote file was created or deleted after checking: $remote. Sync aborted."
+                }
+                if (exists) {
+                    val verify = File(tempDir, "check-before-upload-$index")
+                    try {
+                        session.download(remote, verify)
+                        check(SyncComparisonEngine.gitBlobHash(verify) == expected) {
+                            "Remote file changed after Diff Check: $remote. Sync aborted."
+                        }
+                    } finally { verify.delete() }
+                }
+            }
             session.upload(file, remote)
             progress(index + 1, files.size)
         }
