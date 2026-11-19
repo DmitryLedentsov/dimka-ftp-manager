@@ -47,6 +47,7 @@ class FileZillaImporterTest {
         )
         assertEquals(5, data.entriesRead)
         assertEquals(1, data.duplicateEntries)
+        assertEquals(0, data.conflictingPasswords)
         assertEquals(1, data.skipped)
         assertEquals(3, data.sites.size)
         assertEquals("FTPS", data.sites.last().protocol)
@@ -85,6 +86,25 @@ class FileZillaImporterTest {
         assertEquals(0, plan.updated)
         assertEquals(1, plan.unchanged)
         assertEquals("saved", plan.profiles.single().password)
+    }
+
+    @Test fun conflictingPasswordsAreReportedAndImplicitFtpsIsSupported() {
+        val data = parse("""
+          <FileZilla3><Servers>
+            <Server><Host>host.example</Host><Port>21</Port><Protocol>0</Protocol>
+              <User>user</User><Pass>old</Pass><Name>First</Name></Server>
+            <Server><Host>host.example</Host><Port>21</Port><Protocol>0</Protocol>
+              <User>user</User><Pass>new</Pass><Name>Duplicate</Name></Server>
+            <Server><Host>tls.example</Host><Port>990</Port><Protocol>3</Protocol>
+              <User>user</User><Pass>secret</Pass><Name>Implicit FTPS</Name></Server>
+          </Servers></FileZilla3>
+        """)
+        assertEquals(1, data.duplicateEntries)
+        assertEquals(1, data.conflictingPasswords)
+        assertEquals(2, data.sites.size)
+        assertEquals("new", data.sites.first().password)
+        assertEquals("FTPS_IMPLICIT", data.sites.last().protocol)
+        assertEquals(1, FileZillaImporter.plan(emptyList(), data).conflictingPasswords)
     }
 
     @Test fun rejectsFilesThatAreNotFileZillaExport() {

@@ -2,10 +2,10 @@
 
 Native, local-first Android FTP / FTPS / SFTP + GitHub file deployment tool. No server or DPM required.
 
-## Functions (v0.3)
+## Functions (v0.3.1)
 
 - Save and test multiple FTP/FTPS/SFTP connections, navigate remote folders.
-- Import FileZilla Site Manager XML on Android with a confirmation preview. Duplicate connections are merged by protocol, host, port, and username. Matching saved servers keep their IDs, names, root paths, and any passwords missing from the XML. The XML is never uploaded anywhere.
+- Import FileZilla Site Manager XML on Android with a confirmation preview. Duplicate connections are merged by protocol, host, port, and username. Matching saved servers keep their IDs, names, root paths, and any passwords missing from the XML. Conflicting passwords in duplicate XML entries are reported in the preview; the last nonblank value wins. Implicit FTPS is also supported. The XML is never uploaded anywhere.
 - Download remote file to `Downloads/DimkaFtpManager/Exports` or archive a folder as ZIP.
 - Pick a file or ZIP in Android's document picker and upload it to the selected remote directory/file.
 - Before replacement, back up existing remote files to `Downloads/DimkaFtpManager/Backups`.

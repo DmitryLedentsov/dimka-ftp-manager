@@ -20,7 +20,8 @@ object FileZillaImporter {
         val entriesRead: Int,
         val duplicateEntries: Int,
         val skipped: Int,
-        val passwordMissing: Int
+        val passwordMissing: Int,
+        val conflictingPasswords: Int
     )
 
     data class Plan(
@@ -32,6 +33,7 @@ object FileZillaImporter {
         val duplicateEntries: Int,
         val skipped: Int,
         val passwordsNeeded: Int,
+        val conflictingPasswords: Int,
         val examples: List<String>
     )
 
@@ -92,6 +94,7 @@ object FileZillaImporter {
         val unique = linkedMapOf<Identity, ServerProfile>()
         var skipped = 0
         var duplicateEntries = 0
+        val conflictingConnections = hashSetOf<Identity>()
         for (i in 0 until nodes.length) {
             val node = nodes.item(i) as? Element ?: continue
             val protocol = when (node.text("Protocol")) {
@@ -134,6 +137,8 @@ object FileZillaImporter {
             val previous = unique[key]
             if (previous != null) {
                 duplicateEntries++
+                if (previous.password.isNotEmpty() && password.isNotEmpty() &&
+                    previous.password != password) conflictingConnections.add(key)
                 // Preserve the first readable title, but use the last non-empty credential.
                 unique[key] = previous.copy(password = password.ifBlank { previous.password })
             } else {
@@ -146,7 +151,8 @@ object FileZillaImporter {
             entriesRead = nodes.length,
             duplicateEntries = duplicateEntries,
             skipped = skipped,
-            passwordMissing = unique.values.count { it.password.isEmpty() }
+            passwordMissing = unique.values.count { it.password.isEmpty() },
+            conflictingPasswords = conflictingConnections.size
         )
     }
 
@@ -194,6 +200,7 @@ object FileZillaImporter {
             duplicateEntries = imported.duplicateEntries,
             skipped = imported.skipped,
             passwordsNeeded = merged.count { it.password.isEmpty() },
+            conflictingPasswords = imported.conflictingPasswords,
             examples = changedNames.take(8)
         )
     }

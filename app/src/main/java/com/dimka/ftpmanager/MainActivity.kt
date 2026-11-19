@@ -174,6 +174,10 @@ private fun MainScreen(vm: MainViewModel) {
                     if (plan.duplicateEntries > 0) {
                         Text("Повторов одного подключения в XML: ${plan.duplicateEntries} (объединены)")
                     }
+                    if (plan.conflictingPasswords > 0) {
+                        Text("В XML указаны разные пароли для ${plan.conflictingPasswords} одинаковых подключений. Использован последний непустой пароль — проверь доступ после импорта.",
+                            color = MaterialTheme.colorScheme.error)
+                    }
                     if (plan.skipped > 0) {
                         Text("Пропущено неподдерживаемых или некорректных записей: ${plan.skipped}")
                     }
@@ -595,7 +599,7 @@ private fun ServerDialog(
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    listOf("FTP", "FTPS", "SFTP").forEach { kind ->
+                    listOf("FTP", "FTPS", "FTPS_IMPLICIT", "SFTP").forEach { kind ->
                         FilterChip(selected = protocol == kind, onClick = {
                             val previous = protocol
                             protocol = kind
