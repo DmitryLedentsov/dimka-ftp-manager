@@ -14,7 +14,13 @@ Native, local-first Android FTP / FTPS / SFTP + GitHub file deployment tool. No 
 
 ## GitHub authentication
 
-Create a fine-grained PAT restricted to target repositories with **Contents: Read and write** permission. Paste it into the app's **Settings** screen. Import requires an existing repository; for empty repositories, the app creates `.gitignore` to initialize the default branch.
+**Recommended: Sign in with GitHub** in the app's Settings. This uses GitHub OAuth Device Flow with the registered public client ID (no client secret or backend). The app shows a short-lived code; tap **Copy code and open GitHub**, paste it on GitHub's verification page, and authorize. The app stores the OAuth access token encrypted in Android Keystore, handles polling rate limits and automatically refreshes expiring access tokens. After signing in, tap **Load my repositories** and select one; the app detects its default branch.
+
+OAuth uses the `repo` scope, which grants broad access to the account's repositories. If you prefer per-repository restrictions, use a **fine-grained Personal Access Token** with **Contents: Read and write** permission, pasted into Settings. OAuth takes precedence if both are present; signing out of OAuth restores PAT usage.
+
+Import requires an existing repository; for empty repositories, the app creates `.gitignore` to initialize its default branch.
+
+OAuth Client ID is a public identifier. Do not put a Client Secret in the Android project. GitHub sign-in has not yet been tested on a physical device.
 
 ## Remote paths
 
