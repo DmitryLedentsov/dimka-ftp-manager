@@ -351,7 +351,7 @@ private fun GitHubScreen(vm: MainViewModel) {
                     HorizontalDivider()
                 }
             }
-            Button(Modifier.fillMaxWidth(), enabled = vm.selectedRepoPaths.isNotEmpty() && vm.server != null,
+            Button(modifier = Modifier.fillMaxWidth(), enabled = vm.selectedRepoPaths.isNotEmpty() && vm.server != null,
                 onClick = { vm.enqueue(TransferWorker.DEPLOY, vm.server?.root ?: "/") }) {
                 Icon(Icons.Default.CloudUpload, null); Spacer(Modifier.size(8.dp)); Text("Деплой выбранных файлов")
             }
