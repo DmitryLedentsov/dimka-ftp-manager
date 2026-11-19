@@ -19,6 +19,7 @@ import androidx.work.workDataOf
 import com.dimka.ftpmanager.data.ImportFilter
 import com.dimka.ftpmanager.data.SettingsStore
 import com.dimka.ftpmanager.github.GitHubClient
+import com.dimka.ftpmanager.github.GitHubOAuth
 import com.dimka.ftpmanager.remote.RemoteClient
 import com.dimka.ftpmanager.remote.cleanRemotePath
 import java.io.File
@@ -127,7 +128,7 @@ class TransferWorker(appContext: Context, params: WorkerParameters) : CoroutineW
                         val repo = inputData.getString(REPO) ?: error("Missing repository")
                         val branch = inputData.getString(BRANCH) ?: "master"
                         val paths = JSONArray(inputData.getString(SELECTED) ?: "[]")
-                        val github = GitHubClient(settings.repo().token)
+                        val github = GitHubClient(GitHubOAuth.accessToken(applicationContext))
                         val stage = File(temp, "github").apply { mkdirs() }
                         val files = (0 until paths.length()).map { i ->
                             checkpoint()
@@ -147,7 +148,7 @@ class TransferWorker(appContext: Context, params: WorkerParameters) : CoroutineW
                         val branch = inputData.getString(BRANCH) ?: "master"
                         val ignore = inputData.getString(IGNORE) ?: settings.repo().ignore
                         val scan = FileOperations.scan(session, path, ImportFilter(ignore), ::checkpoint)
-                        val github = GitHubClient(settings.repo().token)
+                        val github = GitHubClient(GitHubOAuth.accessToken(applicationContext))
                         val stage = File(temp, "import").apply { mkdirs() }
                         val files = scan.files.mapIndexed { i, remote ->
                             checkpoint()
