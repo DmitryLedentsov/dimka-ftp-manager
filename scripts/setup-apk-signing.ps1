@@ -36,7 +36,7 @@ foreach ($pair in @(
     @("DIMKA_KEY_PASSWORD", $Password),
     @("DIMKA_KEY_ALIAS", $Alias)
 )) {
-    $pair[1] | gh secret set $pair[0] --repo $Repo
+    & gh secret set $pair[0] --repo $Repo --body $pair[1]
     if ($LASTEXITCODE -ne 0) { throw "Failed to set GitHub secret $($pair[0])" }
 }
 Write-Host "All four GitHub Actions secrets are configured."
