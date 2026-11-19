@@ -18,6 +18,7 @@ import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import com.dimka.ftpmanager.data.ImportFilter
 import com.dimka.ftpmanager.data.SettingsStore
+import com.dimka.ftpmanager.data.SyncPaths
 import com.dimka.ftpmanager.github.GitHubClient
 import com.dimka.ftpmanager.github.GitHubOAuth
 import com.dimka.ftpmanager.remote.RemoteClient
@@ -47,6 +48,9 @@ class TransferWorker(appContext: Context, params: WorkerParameters) : CoroutineW
         const val UPLOAD_ZIP = "upload_zip"
         const val DEPLOY = "github_deploy"
         const val IMPORT = "github_import"
+        const val MAPPING_ID = "mapping_id"
+        const val SYNC_GITHUB_TO_FTP = "sync_github_to_ftp"
+        const val SYNC_FTP_TO_GITHUB = "sync_ftp_to_github"
 
         fun request(vararg pairs: Pair<String, String>): Data {
             val builder = Data.Builder()
@@ -70,6 +74,8 @@ class TransferWorker(appContext: Context, params: WorkerParameters) : CoroutineW
         notifications.createNotificationChannel(NotificationChannel(channel, "Передача файлов", NotificationManager.IMPORTANCE_LOW))
         val message = when (inputData.getString(ACTION)) {
             IMPORT -> "Первоначальный импорт в GitHub"
+            SYNC_GITHUB_TO_FTP -> "Синхронизация GitHub → FTP"
+            SYNC_FTP_TO_GITHUB -> "Синхронизация FTP → GitHub"
             DEPLOY -> "Деплой GitHub → FTP"
             DOWNLOAD_ZIP -> "Скачивание папки в ZIP"
             UPLOAD_ZIP -> "Загрузка ZIP на сервер"
@@ -123,6 +129,77 @@ class TransferWorker(appContext: Context, params: WorkerParameters) : CoroutineW
                         FileOperations.uploadWithBackup(applicationContext, session, path, mapped,
                             temp, { a, b -> report(a, b, "Загрузка ZIP") }, ::checkpoint)?.toString()
                             ?: "Uploaded ${mapped.size} new files"
+                    }
+                    SYNC_GITHUB_TO_FTP -> {
+                        val mappingId = inputData.getString(MAPPING_ID) ?: error("Missing mapping")
+                        val mapping = settings.mappings().firstOrNull { it.id == mappingId }
+                            ?: error("Mapping not found")
+                        check(mapping.ready && mapping.serverId == serverId) { "Mapping is incomplete or changed" }
+                        check(com.dimka.ftpmanager.remote.isWithinRoot(mapping.ftpPath, server.root)) {
+                            "Mapped FTP path outside site root"
+                        }
+                        val github = GitHubClient(GitHubOAuth.accessToken(applicationContext))
+                        val chosen = github.tree(mapping.repository, mapping.branch).mapNotNull { entry ->
+                            SyncPaths.relative(entry.path, mapping.githubPath, mapping.githubDirectory)
+                                ?.let { it to entry.path }
+                        }
+                        check(chosen.isNotEmpty()) { "No GitHub files for the selected mapping" }
+                        check(chosen.size <= SyncPaths.MAX_FILES) { "Too many files; choose a smaller mapping" }
+                        val targetFolder = if (mapping.ftpDirectory) mapping.ftpPath
+                            else mapping.ftpPath.substringBeforeLast('/', "/").ifBlank { "/" }
+                        val stage = File(temp, "git-to-ftp").apply { mkdirs() }
+                        val files = chosen.mapIndexed { i, (relative, gitPath) ->
+                            checkpoint()
+                            val local = File(stage, "file-$i")
+                            github.download(mapping.repository, mapping.branch, gitPath, local)
+                            report(i + 1, chosen.size * 2, "GitHub → FTP: скачивание")
+                            val destinationRelative = if (mapping.ftpDirectory) relative
+                                else mapping.ftpPath.substringAfterLast('/')
+                            destinationRelative to local
+                        }
+                        val backup = FileOperations.uploadWithBackup(
+                            applicationContext, session, targetFolder, files, temp,
+                            { now, _ -> report(chosen.size + now, chosen.size * 2, "GitHub → FTP: загрузка") },
+                            ::checkpoint
+                        )
+                        "Передано ${chosen.size} файлов. Бэкап: " + (backup?.toString() ?: "новые файлы")
+                    }
+                    SYNC_FTP_TO_GITHUB -> {
+                        val mappingId = inputData.getString(MAPPING_ID) ?: error("Missing mapping")
+                        val mapping = settings.mappings().firstOrNull { it.id == mappingId }
+                            ?: error("Mapping not found")
+                        check(mapping.ready && mapping.serverId == serverId) { "Mapping is incomplete or changed" }
+                        check(com.dimka.ftpmanager.remote.isWithinRoot(mapping.ftpPath, server.root)) {
+                            "Mapped FTP path outside site root"
+                        }
+                        val source = if (mapping.ftpDirectory) {
+                            FileOperations.scan(session, mapping.ftpPath, checkpoint = ::checkpoint).files
+                        } else {
+                            check(session.existsFile(mapping.ftpPath)) { "FTP file not found" }
+                            listOf(FileOperations.RemoteFile(
+                                mapping.ftpPath, mapping.ftpPath.substringAfterLast('/'), 0L
+                            ))
+                        }
+                        check(source.isNotEmpty()) { "No FTP files for the selected mapping" }
+                        check(source.size <= SyncPaths.MAX_FILES) { "Too many files; choose a smaller mapping" }
+                        val stage = File(temp, "ftp-to-git").apply { mkdirs() }
+                        val files = source.mapIndexed { i, record ->
+                            checkpoint()
+                            check(record.size <= 20L * 1024 * 1024) { "File too large for GitHub: " + record.relative }
+                            val local = File(stage, "file-$i")
+                            session.download(record.path, local)
+                            check(local.length() <= 20L * 1024 * 1024) { "File too large for GitHub: " + record.relative }
+                            report(i + 1, source.size * 2 + 1, "FTP → GitHub: скачивание")
+                            SyncPaths.githubDestination(mapping, record.relative) to local
+                        }
+                        val github = GitHubClient(GitHubOAuth.accessToken(applicationContext))
+                        val sha = github.commitFiles(
+                            mapping.repository, mapping.branch, files,
+                            "Sync FTP → GitHub: " + mapping.name
+                        ) { now, _ ->
+                            report(source.size + now, source.size * 2 + 1, "FTP → GitHub: коммит")
+                        }
+                        "GitHub commit: " + sha
                     }
                     DEPLOY -> {
                         val repo = inputData.getString(REPO) ?: error("Missing repository")
