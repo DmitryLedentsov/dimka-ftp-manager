@@ -39,6 +39,12 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.runtime.livedata.observeAsState
+import androidx.work.WorkManager
+import androidx.work.WorkInfo
+import com.dimka.ftpmanager.transfer.TransferWorker
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -65,6 +71,13 @@ private fun formattedTime(value: Long): String = if (value <= 0L) "ещё не �
 
 @Composable
 fun SyncMappingsScreen(vm: SyncViewModel) {
+    val context = LocalContext.current
+    val transfers by remember(context) {
+        WorkManager.getInstance(context).getWorkInfosByTagLiveData(TransferWorker.TAG)
+    }.observeAsState(emptyList<WorkInfo>())
+    LaunchedEffect(vm.activeId, transfers.count { it.state.isFinished }) {
+        vm.refreshStatuses()
+    }
     var rename by remember { mutableStateOf<SyncMapping?>(null) }
     var delete by remember { mutableStateOf<SyncMapping?>(null) }
     var newName by remember { mutableStateOf("") }
