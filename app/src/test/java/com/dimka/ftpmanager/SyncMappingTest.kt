@@ -1,5 +1,7 @@
 package com.dimka.ftpmanager
 
+import com.dimka.ftpmanager.data.ComparisonScope
+import com.dimka.ftpmanager.data.ScopeRule
 import com.dimka.ftpmanager.data.SyncMapping
 import com.dimka.ftpmanager.data.FolderCompareMode
 import com.dimka.ftpmanager.data.SyncFileSelection
@@ -13,6 +15,49 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SyncMappingTest {
+    @Test fun scopeRulesIncludeExcludeAndOverrideNestedFolders() {
+        val original = ComparisonScope()
+        assertTrue(original.includesFile("uploads/picture.png"))
+        val withoutUploads = original.withSelection("uploads", true, false)
+        assertFalse(withoutUploads.includesFile("uploads/picture.png"))
+        assertFalse(withoutUploads.shouldTraverseDirectory("uploads"))
+        assertTrue(withoutUploads.shouldTraverseDirectory("mg-templates"))
+        val nested = withoutUploads.withSelection("uploads/keep.php", false, true)
+        assertTrue(nested.shouldTraverseDirectory("uploads"))
+        assertTrue(nested.includesFile("uploads/keep.php"))
+        assertFalse(nested.includesFile("uploads/other.php"))
+
+        val onlySome = ComparisonScope()
+            .withSelection("", true, false)
+            .withSelection("mg-plugins/imshop", true, true)
+            .withSelection("mg-core/lib/MG.php", false, true)
+        assertFalse(onlySome.includesFile("index.php"))
+        assertTrue(onlySome.includesFile("mg-plugins/imshop/imshop.php"))
+        assertTrue(onlySome.includesFile("mg-core/lib/MG.php"))
+        assertTrue(onlySome.shouldTraverseDirectory("mg-core"))
+        assertFalse(onlySome.shouldTraverseDirectory("uploads"))
+
+        val resetSubtree = onlySome.withSelection("mg-plugins", true, false)
+        assertFalse(resetSubtree.includesFile("mg-plugins/imshop/imshop.php"))
+        val all = onlySome.withSelection("", true, true)
+        assertTrue(all.all)
+        assertTrue(all.includesFile("uploads/picture.png"))
+    }
+
+    @Test fun selectedScopesRoundTripAndLegacyMappingsDefaultToAll() {
+        val custom = ComparisonScope().withSelection("", true, false)
+            .withSelection("mg-plugins/imshop", true, true)
+            .withSelection("mg-templates/emka/index.php", false, true)
+        val mapping = SyncMapping(scope = custom)
+        assertEquals(mapping, SyncMapping.fromJson(mapping.toJson()))
+        val legacyJson = mapping.toJson()
+        legacyJson.remove("scope")
+        assertTrue(SyncMapping.fromJson(legacyJson).scope.all)
+        assertTrue(runCatching { ScopeRule("../outside", false, true) }.isFailure)
+        assertTrue(runCatching { ScopeRule("/etc/passwd", false, true) }.isFailure)
+    }
+
+
     @Test fun folderModesSelectTheRightSideOfTheUnion() {
         val git = setOf("same.php", "git/new.php", "assets/banner.webp")
         val ftp = setOf("same.php", "ftp/old.php", "cache/image.png")

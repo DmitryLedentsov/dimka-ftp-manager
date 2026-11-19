@@ -2,7 +2,7 @@
 
 Native, local-first Android FTP / FTPS / SFTP + GitHub file deployment tool. No server or DPM required.
 
-## Functions (v0.7.0)
+## Functions (v0.8.0)
 
 - Save and test multiple FTP/FTPS/SFTP connections, navigate remote folders.
 - Import FileZilla Site Manager XML on Android with a confirmation preview. Duplicate connections are merged by protocol, host, port, and username. Matching saved servers keep their IDs, names, root paths, and any passwords missing from the XML. Conflicting passwords in duplicate XML entries are reported in the preview; the last nonblank value wins. Implicit FTPS is also supported. The XML is never uploaded anywhere.
@@ -89,3 +89,11 @@ Filtering is applied **before hashing and downloading FTP content**, not only in
 A fresh Diff Check selects all eligible changes by default. Buttons **Select all**, **Clear selection**, and **Invert selection** work only on actionable differences; matching or oversized files are excluded. Inversion is a one-time action, not a persistent flag. A change to the mode invalidates the old check status and its selected-file snapshot, so the next transfer requires a fresh Diff Check.
 
 Transfers remain directional: with "Common + new from GitHub", a file that exists only on GitHub can be pushed to FTP but cannot be used as a source for FTP → GitHub.
+
+## Selective comparison scope (v0.8)
+
+In any directory-to-directory mapping, tap **Выбрать папки и файлы** before **Diff Check**. Browse the union of GitHub and FTP folders one level at a time. Set checkboxes for whole folders (including nested content) or individual files, or use **Всё / Снять всё** to select everything or nothing. Scope rules are persisted separately for each mapping; existing mappings default to comparing everything. Nested inclusion rules can override an excluded parent, so you can ignore `uploads/` while including an individual file under it.
+
+The selection is applied **before FTP recursion**, skipping unselected branches entirely. GitHub tree items are filtered before the diff comparison and FTP hashing. After the scope filter, the three existing modes (all/common/common+new-GitHub) still apply; afterward, individual changed files can be checked or unchecked for transfer. Every WorkManager transfer rechecks the mapped scope with a fresh snapshot and rejects stale selections. Changing the mapping endpoint resets the scope to its default; changing the scope invalidates the previous check.
+
+Folder navigation for scope configuration loads one level of GitHub/FTP metadata at a time; it doesn't download any file contents. The selected folder's contents are only downloaded during the subsequent Diff Check.
