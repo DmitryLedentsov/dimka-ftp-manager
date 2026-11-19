@@ -79,7 +79,7 @@ config.php
 """
 
 data class RemoteEntry(val name: String, val path: String, val directory: Boolean, val size: Long = 0L)
-data class RepoEntry(val path: String, val size: Long = 0L)
+data class RepoEntry(val path: String, val size: Long = 0L, val sha: String = "")
 
 data class ImportSummary(val files: Int, val bytes: Long, val examples: List<String>, val skipped: Int)
 

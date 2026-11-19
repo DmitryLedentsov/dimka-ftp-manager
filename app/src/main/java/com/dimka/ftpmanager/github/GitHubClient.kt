@@ -54,7 +54,7 @@ class GitHubClient(private val token: String) {
         val arr = payload.getJSONArray("tree")
         return (0 until arr.length()).map { arr.getJSONObject(it) }
             .filter { it.optString("type") == "blob" }
-            .map { RepoEntry(it.getString("path"), it.optLong("size")) }
+            .map { RepoEntry(it.getString("path"), it.optLong("size"), it.optString("sha")) }
             .sortedBy { it.path.lowercase() }
     }
 
