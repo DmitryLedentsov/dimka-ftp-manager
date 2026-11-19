@@ -54,6 +54,14 @@ class SettingsStore(context: Context) {
         check(prefs.edit().putString(name, encrypt(value)).commit()) { "Failed to save settings" }
     }
 
+    fun checkStatuses(): Map<String, CheckStatus> = checkStatusFromJson(get("sync_checks", "[]"))
+    @Synchronized fun saveCheckStatuses(values: Map<String, CheckStatus>) =
+        put("sync_checks", values.toChecksJson())
+    fun updateCheckStatus(id: String, update: (CheckStatus) -> CheckStatus) {
+        val map = checkStatuses().toMutableMap()
+        map[id] = update(map[id] ?: CheckStatus(id))
+        saveCheckStatuses(map)
+    }
     fun mappings(): List<SyncMapping> = parseMappings(get("sync_mappings", "[]"))
     fun saveMappings(items: List<SyncMapping>) = put("sync_mappings", items.toMappingsJson())
     fun servers(): List<ServerProfile> = parseServers(get("servers", "[]"))
