@@ -157,6 +157,9 @@ fun SyncMappingsScreen(vm: SyncViewModel) {
                             Text(result.explanation, color = MaterialTheme.colorScheme.error)
                         else {
                             Text("GitHub: +" + result.added + " · FTP: −" + result.removed, fontSize = 12.sp)
+                            if (result.note.isNotBlank())
+                                Text(result.note, fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.secondary)
                             LazyColumn(Modifier.heightIn(max = 440.dp)) {
                                 items(result.lines) { line ->
                                     val tint = when (line.marker) {

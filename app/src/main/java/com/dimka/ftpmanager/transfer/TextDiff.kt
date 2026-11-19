@@ -12,7 +12,7 @@ import java.nio.charset.StandardCharsets
 object TextDiff {
     data class Line(val marker: String, val content: String, val oldLine: Int, val newLine: Int)
     data class Preview(val lines: List<Line>, val explanation: String = "", val added: Int = 0,
-        val removed: Int = 0)
+        val removed: Int = 0, val note: String = "")
 
     const val MAX_DIFF_SIZE = 256 * 1024
     const val MAX_DIFF_LINES = 1400
@@ -26,7 +26,9 @@ object TextDiff {
             .onMalformedInput(CodingErrorAction.REPORT)
             .onUnmappableCharacter(CodingErrorAction.REPORT)
             .decode(ByteBuffer.wrap(data)).toString()
-        val lines = text.split("\n")
+        // GitHub and FTP may store identical code with different line endings.
+        // Compare logical lines, but keep exact byte hashes for sync conflict checks.
+        val lines = text.replace("\r\n", "\n").replace('\r', '\n').split("\n")
         require(lines.size <= MAX_DIFF_LINES) { "Слишком много строк для diff (лимит 1400)." }
         return lines
     }
@@ -34,7 +36,17 @@ object TextDiff {
     fun preview(github: File?, ftp: File?): Preview {
         val old = read(ftp)
         val newer = read(github)
-        return compare(old, newer)
+        val compared = compare(old, newer)
+        // EOL-only edits are not semantic line edits, yet byte-accurate sync
+        // intentionally still sees these files as CHANGED.
+        if (ftp != null && github != null && compared.added == 0 && compared.removed == 0 &&
+            !ftp.readBytes().contentEquals(github.readBytes())) {
+            return compared.copy(
+                note = "Текст совпадает построчно, но байты отличаются (вероятнее всего CRLF/LF). " +
+                    "Файл всё ещё считается изменённым при побайтовой синхронизации."
+            )
+        }
+        return compared
     }
 
     fun compare(old: List<String>, newer: List<String>): Preview {

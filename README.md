@@ -97,3 +97,10 @@ In any directory-to-directory mapping, tap **Выбрать папки и фай
 The selection is applied **before FTP recursion**, skipping unselected branches entirely. GitHub tree items are filtered before the diff comparison and FTP hashing. After the scope filter, the three existing modes (all/common/common+new-GitHub) still apply; afterward, individual changed files can be checked or unchecked for transfer. Every WorkManager transfer rechecks the mapped scope with a fresh snapshot and rejects stale selections. Changing the mapping endpoint resets the scope to its default; changing the scope invalidates the previous check.
 
 Folder navigation for scope configuration loads one level of GitHub/FTP metadata at a time; it doesn't download any file contents. The selected folder's contents are only downloaded during the subsequent Diff Check.
+
+
+## Accurate diff for mixed line endings (v0.8.1)
+
+The line-by-line Diff Check now treats Windows CRLF (`\r\n`) and Unix LF (`\n`) as the same logical newline. A difference only in EOL encoding no longer shows every line as both added and removed. When the normalized text matches but raw bytes differ, the diff explicitly explains the discrepancy.
+
+**Important:** Content hashes, changed-file status and transfer preconditions remain byte-exact. An EOL-only change can still appear as a selectable changed file; it does not silently skip an overwrite or hide a conflict.
