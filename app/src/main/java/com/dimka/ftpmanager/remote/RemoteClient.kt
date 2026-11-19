@@ -106,7 +106,12 @@ object RemoteClient {
                     val normalized = cleanRemotePath(path)
                     val parent = normalized.substringBeforeLast('/', "/").ifBlank { "/" }
                     val name = normalized.substringAfterLast('/')
-                    return list(parent).any { it.name == name && !it.directory }
+                    val files = client.listFiles(parent)
+                    if (client.replyCode == 550) return false // Parent directory not yet created
+                    check(FTPReply.isPositiveCompletion(client.replyCode)) {
+                        "FTP exists check failed: " + client.replyString
+                    }
+                    return files.any { it.name == name && it.isFile }
                 }
                 override fun close() {
                     runCatching { client.logout() }
