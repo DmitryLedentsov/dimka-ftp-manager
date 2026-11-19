@@ -13,6 +13,7 @@ import com.dimka.ftpmanager.data.ServerProfile
 import com.dimka.ftpmanager.data.SettingsStore
 import com.dimka.ftpmanager.data.SyncDirection
 import com.dimka.ftpmanager.data.SyncMapping
+import com.dimka.ftpmanager.data.ComparisonScope
 import com.dimka.ftpmanager.data.FolderCompareMode
 import com.dimka.ftpmanager.data.SyncFileSelection
 import com.dimka.ftpmanager.data.SyncPaths
@@ -47,6 +48,26 @@ data class MappingPicker(
     val folder: String = ""
 )
 
+data class ScopeLocation(
+    val relative: String = "",
+    val onGithub: Boolean = true,
+    val onFtp: Boolean = true
+)
+
+data class ScopePicker(
+    val mappingId: String,
+    val location: ScopeLocation = ScopeLocation(),
+    val history: List<ScopeLocation> = emptyList()
+)
+
+data class ScopeBrowserItem(
+    val relative: String,
+    val name: String,
+    val directory: Boolean,
+    val onGithub: Boolean,
+    val onFtp: Boolean
+)
+
 class SyncViewModel(app: Application) : AndroidViewModel(app) {
     private val store = SettingsStore(app)
     var mappings by mutableStateOf(store.mappings())
@@ -60,6 +81,14 @@ class SyncViewModel(app: Application) : AndroidViewModel(app) {
     var githubTree by mutableStateOf<List<RepoEntry>>(emptyList())
         private set
     var remoteEntries by mutableStateOf<List<MappingBrowserItem>>(emptyList())
+        private set
+    var scopePicker by mutableStateOf<ScopePicker?>(null)
+        private set
+    var scopeEntries by mutableStateOf<List<ScopeBrowserItem>>(emptyList())
+        private set
+    var scopeLoading by mutableStateOf(false)
+        private set
+    var scopeError by mutableStateOf("")
         private set
     var preview by mutableStateOf<SyncPreview?>(null)
         private set
@@ -88,6 +117,127 @@ class SyncViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var diffBusy by mutableStateOf(false)
         private set
+
+
+    /** Scope is configured relative to a mapping, not a global repository/host pair. */
+    fun openScopePicker(id: String) {
+        val mapping = mappings.firstOrNull { it.id == id } ?: return
+        if (!mapping.ready || !mapping.githubDirectory || !mapping.ftpDirectory) {
+            message = "Сначала настрой соответствие двух папок"
+            return
+        }
+        if (loading || checkAllRunning) return
+        scopePicker = ScopePicker(id)
+        scopeEntries = emptyList()
+        refreshScopeFolder()
+    }
+
+    fun closeScopePicker() {
+        scopePicker = null
+        scopeEntries = emptyList()
+        scopeError = ""
+    }
+
+    fun refreshScopeFolder() {
+        val state = scopePicker ?: return
+        if (scopeLoading) return
+        val mapping = mappings.firstOrNull { it.id == state.mappingId } ?: return
+        val location = state.location
+        scopeLoading = true
+        scopeError = ""
+        scopeEntries = emptyList()
+        viewModelScope.launch {
+            try {
+                val entries = withContext(Dispatchers.IO) {
+                    val gitEntries = if (location.onGithub) {
+                        val github = GitHubClient(GitHubOAuth.accessToken(getApplication()))
+                        val path = listOf(mapping.githubPath.trim('/'), location.relative)
+                            .filter { it.isNotBlank() }.joinToString("/")
+                        github.listFolder(mapping.repository, mapping.branch, path)
+                    } else emptyList()
+
+                    val ftpEntries = if (location.onFtp) {
+                        val server = store.servers().firstOrNull { it.id == mapping.serverId }
+                            ?: error("FTP-сервер не найден")
+                        val path = if (location.relative.isBlank()) mapping.ftpPath
+                            else SyncPaths.ftpDestination(mapping, location.relative)
+                        RemoteClient.connect(getApplication(), server).use { ftp ->
+                            ftp.list(path)
+                        }
+                    } else emptyList()
+
+                    val combined = linkedMapOf<String, ScopeBrowserItem>()
+                    for (item in gitEntries) {
+                        if (item.name.isBlank() || item.name == "." || item.name == ".." ||
+                            '/' in item.name || '\\' in item.name) continue
+                        val relative = listOf(location.relative, item.name)
+                            .filter { it.isNotEmpty() }.joinToString("/")
+                        combined[item.name] = ScopeBrowserItem(
+                            relative, item.name, item.directory, true, false
+                        )
+                    }
+                    for (item in ftpEntries) {
+                        if (item.name.isBlank() || item.name == "." || item.name == ".." ||
+                            '/' in item.name || '\\' in item.name) continue
+                        val relative = listOf(location.relative, item.name)
+                            .filter { it.isNotEmpty() }.joinToString("/")
+                        val previous = combined[item.name]
+                        combined[item.name] = ScopeBrowserItem(
+                            relative, item.name, item.directory || (previous?.directory == true),
+                            previous?.onGithub == true, true
+                        )
+                    }
+                    combined.values.sortedWith(compareByDescending<ScopeBrowserItem> {
+                        it.directory
+                    }.thenBy { it.name.lowercase() })
+                }
+                if (scopePicker == state && mappings.any { it == mapping }) {
+                    scopeEntries = entries
+                }
+            } catch (e: Exception) {
+                if (scopePicker == state) scopeError =
+                    "Не удалось загрузить каталог: " + (e.message ?: "ошибка")
+            } finally {
+                scopeLoading = false
+            }
+        }
+    }
+
+    fun enterScopeFolder(item: ScopeBrowserItem) {
+        val current = scopePicker ?: return
+        if (scopeLoading || !item.directory) return
+        scopePicker = current.copy(
+            location = ScopeLocation(item.relative, item.onGithub, item.onFtp),
+            history = current.history + current.location
+        )
+        refreshScopeFolder()
+    }
+
+    fun scopeUp() {
+        val current = scopePicker ?: return
+        if (scopeLoading || current.history.isEmpty()) return
+        scopePicker = current.copy(
+            location = current.history.last(),
+            history = current.history.dropLast(1)
+        )
+        refreshScopeFolder()
+    }
+
+    fun selectScope(id: String, relative: String, directory: Boolean, included: Boolean) {
+        if (loading || scopeLoading || checkAllRunning) return
+        replace(id) {
+            if (!it.githubDirectory || !it.ftpDirectory) it
+            else it.copy(scope = it.scope.withSelection(relative, directory, included))
+        }
+    }
+
+    fun selectEverythingInScope(id: String, selected: Boolean) {
+        if (loading || scopeLoading || checkAllRunning) return
+        replace(id) {
+            if (!it.githubDirectory || !it.ftpDirectory) it
+            else it.copy(scope = ComparisonScope().withSelection("", true, selected))
+        }
+    }
 
     fun openMapping(id: String) {
         statuses = store.checkStatuses()
@@ -230,6 +380,8 @@ class SyncViewModel(app: Application) : AndroidViewModel(app) {
     fun reloadFromStore() {
         activeId = null
         picker = null
+        scopePicker = null
+        scopeEntries = emptyList()
         preview = null
         comparison = null
         selectedPaths = emptySet()
@@ -339,7 +491,10 @@ class SyncViewModel(app: Application) : AndroidViewModel(app) {
             old.copy(repository = current.repository, branch = current.branch,
                 githubPath = path.trim('/'), githubDirectory = directory, githubPicked = true,
                 ftpPicked = if (mismatch) false else old.ftpPicked,
-                ftpPath = if (mismatch) "" else old.ftpPath)
+                ftpPath = if (mismatch) "" else old.ftpPath,
+                scope = if (old.githubPath != path.trim('/') ||
+                    old.repository != current.repository || old.branch != current.branch)
+                    ComparisonScope() else old.scope)
         }
         picker = null
     }
@@ -395,7 +550,9 @@ class SyncViewModel(app: Application) : AndroidViewModel(app) {
             old.copy(serverId = current.serverId, ftpPath = cleanRemotePath(path),
                 ftpDirectory = directory, ftpPicked = true,
                 githubPicked = if (mismatch) false else old.githubPicked,
-                githubPath = if (mismatch) "" else old.githubPath)
+                githubPath = if (mismatch) "" else old.githubPath,
+                scope = if (old.ftpPath != cleanRemotePath(path) || old.serverId != current.serverId)
+                    ComparisonScope() else old.scope)
         }
         picker = null
     }

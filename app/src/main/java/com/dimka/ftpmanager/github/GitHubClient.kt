@@ -58,6 +58,29 @@ class GitHubClient(private val token: String) {
             .sortedBy { it.path.lowercase() }
     }
 
+
+    /**
+     * One folder level at a time for the comparison-scope picker.
+     * Avoid recursively listing the entire repository when browsing large sites.
+     * A GitHub 404 is expected for FTP-only directories.
+     */
+    data class FolderItem(val name: String, val directory: Boolean)
+
+    fun listFolder(repo: String, branch: String, path: String): List<FolderItem> {
+        val suffix = if (path.isBlank()) "" else "/" + Uri.encode(path.trim('/'), "/")
+        val payload = try {
+            api("GET", repoPath(repo) + "/contents" + suffix + "?ref=" + Uri.encode(branch))
+        } catch (e: IOException) {
+            if (e.message?.contains("HTTP 404") == true) return emptyList()
+            throw e
+        }
+        val items = JSONArray(String(payload, Charsets.UTF_8))
+        return (0 until items.length()).map { items.getJSONObject(it) }
+            .filter { it.optString("type") == "dir" || it.optString("type") == "file" }
+            .map { FolderItem(it.getString("name"), it.optString("type") == "dir") }
+            .sortedWith(compareByDescending<FolderItem> { it.directory }.thenBy { it.name.lowercase() })
+    }
+
     /** First page of accessible repositories, newest first. */
     fun repositories(): List<String> {
         val array = JSONArray(String(api("GET", "/user/repos?per_page=100&sort=updated"), Charsets.UTF_8))
