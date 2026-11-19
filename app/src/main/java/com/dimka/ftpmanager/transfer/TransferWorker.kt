@@ -8,7 +8,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
-import android.os.ServiceInfo
+import android.content.pm.ServiceInfo
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import androidx.work.CoroutineWorker
