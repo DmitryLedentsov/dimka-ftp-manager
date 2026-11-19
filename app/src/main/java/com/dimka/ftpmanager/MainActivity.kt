@@ -2,6 +2,9 @@ package com.dimka.ftpmanager
 
 import android.Manifest
 import android.content.Intent
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
@@ -93,6 +96,7 @@ import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import com.dimka.ftpmanager.data.RepoSettings
 import com.dimka.ftpmanager.data.ServerProfile
+import com.dimka.ftpmanager.github.GitHubOAuth
 import com.dimka.ftpmanager.remote.cleanRemotePath
 import com.dimka.ftpmanager.transfer.TransferWorker
 import java.util.Locale
@@ -322,7 +326,7 @@ private fun GitHubScreen(vm: MainViewModel) {
                 Text("Ветка: ${vm.repo.branch} · Настроить можно во вкладке «Настройки»", fontSize = 12.sp)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(onClick = vm::loadRepo, enabled = !vm.isLoading && vm.repo.repository.isNotBlank()) { Text("Файлы GitHub") }
-                    Button(onClick = vm::prepareImport, enabled = !vm.isLoading && vm.server != null && vm.repo.token.isNotBlank()) {
+                    Button(onClick = vm::prepareImport, enabled = !vm.isLoading && vm.server != null && vm.hasGithubCredential) {
                         Text("FTP → GitHub")
                     }
                 }
@@ -359,7 +363,7 @@ private fun GitHubScreen(vm: MainViewModel) {
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Icon(Icons.Default.Info, null)
-                    Text("Выбери сервер и укажи GitHub Token + owner/repo в настройках. Для первоначального импорта нажми «FTP → GitHub». Перед коммитом увидишь количество файлов и фильтры.")
+                    Text("Выбери сервер и подключи GitHub через вход в браузере или PAT. Репозиторий можно выбрать в настройках. Перед первым импортом увидишь количество файлов и фильтры.")
                 }
             }
             Spacer(Modifier.weight(1f))
@@ -404,6 +408,8 @@ private fun JobsScreen() {
 
 @Composable
 private fun SettingsScreen(vm: MainViewModel) {
+    val context = LocalContext.current
+    var repoMenuExpanded by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<ServerProfile?>(null) }
     var adding by remember { mutableStateOf(false) }
     var draftToken by remember(vm.repo.token) { mutableStateOf(vm.repo.token) }
@@ -431,15 +437,75 @@ private fun SettingsScreen(vm: MainViewModel) {
             }
         }
         HorizontalDivider()
+
         Text("GitHub", style = MaterialTheme.typography.titleMedium)
+        OutlinedCard(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                Text(
+                    vm.oauthSession?.let { "Подключено: @" + it.login } ?: "Вход через GitHub пока не выполнен",
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    "Вход через браузер, без сервера и Client Secret. GitHub запросит OAuth-доступ repo ко всем доступным репозиториям. Для доступа только к отдельным репозиториям используй PAT ниже.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (vm.oauthSession == null) {
+                    Button(onClick = vm::startGithubLogin, enabled = !vm.oauthBusy, modifier = Modifier.fillMaxWidth()) {
+                        Text(if (vm.oauthBusy) "Ожидание GitHub…" else "Войти через GitHub")
+                    }
+                } else {
+                    OutlinedButton(onClick = vm::logoutGithub, modifier = Modifier.fillMaxWidth()) {
+                        Text("Выйти из GitHub")
+                    }
+                }
+                vm.deviceAuthorization?.let { auth ->
+                    Text("Код подтверждения: " + auth.userCode, style = MaterialTheme.typography.titleLarge,
+                        color = MaterialTheme.colorScheme.secondary)
+                    Text("Вставь код на странице GitHub и подтверди разрешения.",
+                        fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Button(
+                        onClick = {
+                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            clipboard.setPrimaryClip(ClipData.newPlainText("GitHub device code", auth.userCode))
+                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(GitHubOAuth.DEVICE_URL)))
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("Скопировать код и открыть GitHub") }
+                    TextButton(onClick = vm::cancelGithubLogin) { Text("Отменить вход") }
+                }
+                if (vm.oauthStatus.isNotBlank()) Text(vm.oauthStatus, fontSize = 12.sp)
+                if (vm.hasGithubCredential) {
+                    OutlinedButton(onClick = vm::loadRepositories, enabled = !vm.isLoading,
+                        modifier = Modifier.fillMaxWidth()) {
+                        Text("Загрузить мои репозитории")
+                    }
+                    if (vm.availableRepositories.isNotEmpty()) {
+                        Box {
+                            OutlinedButton(onClick = { repoMenuExpanded = true }, modifier = Modifier.fillMaxWidth()) {
+                                Text("Выбрать из списка (" + vm.availableRepositories.size + ")")
+                            }
+                            DropdownMenu(expanded = repoMenuExpanded, onDismissRequest = { repoMenuExpanded = false }) {
+                                vm.availableRepositories.forEach { fullName ->
+                                    DropdownMenuItem(text = { Text(fullName) }, onClick = {
+                                        repoMenuExpanded = false
+                                        vm.chooseRepository(fullName)
+                                    })
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         OutlinedTextField(value = draftRepo, onValueChange = { draftRepo = it },
             modifier = Modifier.fillMaxWidth(), label = { Text("Репозиторий (owner/name)") }, singleLine = true)
         OutlinedTextField(value = draftBranch, onValueChange = { draftBranch = it },
             modifier = Modifier.fillMaxWidth(), label = { Text("Ветка") }, singleLine = true)
         OutlinedTextField(value = draftToken, onValueChange = { draftToken = it },
-            modifier = Modifier.fillMaxWidth(), label = { Text("Fine-grained GitHub PAT") },
+            modifier = Modifier.fillMaxWidth(), label = { Text("PAT (альтернатива OAuth)") },
             visualTransformation = PasswordVisualTransformation(), singleLine = true)
-        Text("Токен: Contents Read and write. Хранится зашифрованным в Android Keystore.",
+        Text("PAT используется, если не выполнен вход через GitHub. Токены хранятся зашифрованными в Android Keystore.",
             fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text("Правила исключения при FTP → GitHub", style = MaterialTheme.typography.titleSmall)
         OutlinedTextField(value = draftIgnore, onValueChange = { draftIgnore = it },
