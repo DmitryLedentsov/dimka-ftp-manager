@@ -226,6 +226,23 @@ class SyncViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** Reload new host and mapping collections after a full configuration import. */
+    fun reloadFromStore() {
+        activeId = null
+        picker = null
+        preview = null
+        comparison = null
+        selectedPaths = emptySet()
+        diffFile = null
+        diffResult = null
+        servers = store.servers()
+        mappings = store.mappings()
+        statuses = store.checkStatuses()
+        githubRepos = emptyList()
+        githubTree = emptyList()
+        remoteEntries = emptyList()
+    }
+
     fun dismissMessage() { message = null }
     fun cancelPicker() { picker = null }
     fun cancelPreview() { preview = null }

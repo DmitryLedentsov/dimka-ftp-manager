@@ -156,13 +156,39 @@ private fun MainScreen(vm: MainViewModel, syncVm: SyncViewModel) {
                 0 -> FtpScreen(vm)
                 1 -> SyncMappingsScreen(syncVm)
                 2 -> JobsScreen()
-                3 -> SettingsScreen(vm)
+                3 -> SettingsScreen(vm, syncVm)
             }
         }
     }
     vm.message?.let { msg ->
         AlertDialog(onDismissRequest = vm::dismissMessage, title = { Text("DimkaFtpManager") },
             text = { Text(msg) }, confirmButton = { TextButton(onClick = vm::dismissMessage) { Text("OK") } })
+    }
+    vm.pendingConfigImport?.let { backup ->
+        AlertDialog(
+            onDismissRequest = vm::cancelFullConfigImport,
+            title = { Text("Восстановить всю конфигурацию?") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Серверов с логинами/паролями: " + backup.serverCount)
+                    Text("Синхронизаций: " + backup.mappingCount)
+                    Text("Сохранённых проверок: " + backup.checksCount)
+                    Text("GitHub OAuth: " + (if (backup.hasOAuth) "есть токены" else "нет"))
+                    Text("GitHub PAT: " + (if (backup.hasPat) "есть токен" else "нет"))
+                    Text("SFTP-отпечатков: " + backup.fingerprints.size)
+                    Text("Импорт ПОЛНОСТЬЮ заменит текущие настройки, включая все доступы и привязки. Файлы сайтов на FTP и GitHub не изменятся.",
+                        color = MaterialTheme.colorScheme.error)
+                }
+            },
+            confirmButton = {
+                Button(enabled = !vm.isLoading, onClick = {
+                    vm.confirmFullConfigImport { syncVm.reloadFromStore() }
+                }) { Text("Заменить настройки") }
+            },
+            dismissButton = {
+                TextButton(onClick = vm::cancelFullConfigImport) { Text("Отмена") }
+            }
+        )
     }
     vm.fileZillaPlan?.let { plan ->
         AlertDialog(
@@ -392,11 +418,17 @@ private fun JobsScreen() {
 }
 
 @Composable
-private fun SettingsScreen(vm: MainViewModel) {
+private fun SettingsScreen(vm: MainViewModel, syncVm: SyncViewModel) {
     val context = LocalContext.current
     val fileZillaPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) vm.previewFileZilla(uri)
     }
+    val fullExport = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json")
+    ) { uri -> if (uri != null) vm.exportFullConfig(uri) }
+    val fullImport = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri -> if (uri != null) vm.previewFullConfigImport(uri) }
     var repoMenuExpanded by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<ServerProfile?>(null) }
     var adding by remember { mutableStateOf(false) }
@@ -406,6 +438,25 @@ private fun SettingsScreen(vm: MainViewModel) {
     var draftIgnore by remember(vm.repo.ignore) { mutableStateOf(vm.repo.ignore) }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         PageTitle("Настройки", "Все доступы и пути задаются на телефоне")
+        HorizontalDivider()
+        Text("Резервная копия приложения", style = MaterialTheme.typography.titleMedium)
+        Text("Полный JSON: FTP/SFTP-хосты и пароли, GitHub OAuth и PAT, связи, режимы сравнения, статусы и отпечатки SFTP. Весь файл — обычный текст без шифрования.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        OutlinedButton(
+            onClick = { fullExport.launch("DimkaFtpManager-full-backup.json") },
+            modifier = Modifier.fillMaxWidth(),
+            enabled = !vm.isLoading
+        ) { Icon(Icons.Default.CloudDownload, null); Spacer(Modifier.size(8.dp)); Text("Экспортировать всё (JSON)") }
+        OutlinedButton(
+            onClick = { fullImport.launch(arrayOf("application/json", "text/plain", "*/*")) },
+            modifier = Modifier.fillMaxWidth(),
+            enabled = !vm.isLoading && !syncVm.loading
+        ) { Icon(Icons.Default.FolderOpen, null); Spacer(Modifier.size(8.dp)); Text("Импортировать всё (JSON)") }
+        Text("ОСТОРОЖНО: экспорт содержит пароли и токены открытым текстом. Не публикуй JSON и не отправляй посторонним. При импорте сначала покажем состав файла и попросим подтверждение.",
+            color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+        HorizontalDivider()
+
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("FTP / FTPS / SFTP", modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
             Button(onClick = { adding = true; editing = null }) { Icon(Icons.Default.Add, null); Text("Сервер") }
