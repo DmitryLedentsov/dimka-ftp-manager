@@ -62,7 +62,7 @@ object RemoteClient {
         client.controlEncoding = "UTF-8"
         client.connectTimeout = 15_000
         client.defaultTimeout = 20_000
-        client.dataTimeout = 60_000
+        client.setDataTimeout(java.time.Duration.ofSeconds(60))
         try {
             client.connect(server.host.trim(), server.port)
             check(FTPReply.isPositiveCompletion(client.replyCode)) { "FTP connection refused: ${client.replyString}" }
