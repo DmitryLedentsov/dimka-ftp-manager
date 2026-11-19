@@ -68,14 +68,22 @@ object FileZillaImporter {
             }
             output.toByteArray()
         }
+        require(!String(bytes, Charsets.UTF_8).contains("<!DOCTYPE", ignoreCase = true)) {
+            "XML с DOCTYPE не поддерживается"
+        }
         val factory = DocumentBuilderFactory.newInstance()
         factory.isNamespaceAware = false
         factory.isExpandEntityReferences = false
-        factory.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true)
-        factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
-        factory.setFeature("http://xml.org/sax/features/external-general-entities", false)
-        factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false)
-        val doc = factory.newDocumentBuilder().parse(ByteArrayInputStream(bytes))
+        // Some Android XML parsers do not recognize every Xerces feature.
+        // Reject DOCTYPE above, disable external entities where supported,
+        // and provide a resolver that never uses the network.
+        runCatching { factory.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true) }
+        runCatching { factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true) }
+        runCatching { factory.setFeature("http://xml.org/sax/features/external-general-entities", false) }
+        runCatching { factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false) }
+        val builder = factory.newDocumentBuilder()
+        builder.setEntityResolver { _, _ -> org.xml.sax.InputSource(java.io.StringReader("")) }
+        val doc = builder.parse(ByteArrayInputStream(bytes))
         require(doc.documentElement?.nodeName == "FileZilla3") { "Неверный формат: ожидается экспорт FileZilla3" }
         val serversRoot = doc.documentElement.child("Servers")
             ?: error("В XML нет раздела Servers")
