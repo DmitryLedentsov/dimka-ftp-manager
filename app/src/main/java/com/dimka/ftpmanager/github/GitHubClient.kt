@@ -119,12 +119,31 @@ class GitHubClient(private val token: String) {
     /** Commit only selected mapped files. No deletion or .gitignore rewrite. */
     fun commitFiles(
         repo: String, branch: String, files: List<Pair<String, File>>,
-        message: String, progress: (Int, Int) -> Unit = { _, _ -> }
+        message: String, progress: (Int, Int) -> Unit = { _, _ -> },
+        expectedFileShas: Map<String, String>? = null
     ): String {
         require(token.isNotBlank()) { "GitHub authorization required" }
         require(files.isNotEmpty()) { "No files selected" }
         require(files.map { it.first }.distinct().size == files.size) { "Duplicate target paths" }
         val (head, baseTree) = branchHead(repo, branch)
+        if (expectedFileShas != null) {
+            val payload = obj("GET", "${repoPath(repo)}/git/trees/$baseTree?recursive=1")
+            check(!payload.optBoolean("truncated")) { "GitHub tree too large for safe compare" }
+            val objects = payload.getJSONArray("tree")
+            val actual = mutableMapOf<String, String>()
+            for (i in 0 until objects.length()) {
+                val element = objects.getJSONObject(i)
+                if (element.optString("type") == "blob") {
+                    val p = element.getString("path")
+                    if (p in expectedFileShas) actual[p] = element.optString("sha")
+                }
+            }
+            expectedFileShas.forEach { (path, expected) ->
+                check(actual[path].orEmpty() == expected) {
+                    "GitHub file changed since comparison: $path"
+                }
+            }
+        }
         val entries = JSONArray()
         files.forEachIndexed { index, (path, source) ->
             require(path.isNotBlank() && !path.startsWith('/') &&
