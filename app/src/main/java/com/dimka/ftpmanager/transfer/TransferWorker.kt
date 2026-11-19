@@ -19,6 +19,9 @@ import androidx.work.workDataOf
 import com.dimka.ftpmanager.data.ImportFilter
 import com.dimka.ftpmanager.data.SettingsStore
 import com.dimka.ftpmanager.data.SyncPaths
+import com.dimka.ftpmanager.data.SyncJobDraft
+import com.dimka.ftpmanager.data.SyncDirection
+import com.dimka.ftpmanager.data.FileDifference
 import com.dimka.ftpmanager.github.GitHubClient
 import com.dimka.ftpmanager.github.GitHubOAuth
 import com.dimka.ftpmanager.remote.RemoteClient
@@ -49,6 +52,7 @@ class TransferWorker(appContext: Context, params: WorkerParameters) : CoroutineW
         const val DEPLOY = "github_deploy"
         const val IMPORT = "github_import"
         const val MAPPING_ID = "mapping_id"
+        const val SYNC_PLAN = "sync_plan_id"
         const val SYNC_GITHUB_TO_FTP = "sync_github_to_ftp"
         const val SYNC_FTP_TO_GITHUB = "sync_ftp_to_github"
 
@@ -130,76 +134,110 @@ class TransferWorker(appContext: Context, params: WorkerParameters) : CoroutineW
                             temp, { a, b -> report(a, b, "Загрузка ZIP") }, ::checkpoint)?.toString()
                             ?: "Uploaded ${mapped.size} new files"
                     }
-                    SYNC_GITHUB_TO_FTP -> {
+                    SYNC_GITHUB_TO_FTP, SYNC_FTP_TO_GITHUB -> {
                         val mappingId = inputData.getString(MAPPING_ID) ?: error("Missing mapping")
+                        val planId = inputData.getString(SYNC_PLAN) ?: error("Missing sync plan")
+                        require(Regex("[0-9a-fA-F-]{36}").matches(planId)) { "Invalid sync plan id" }
+                        val draftFile = File(applicationContext.filesDir, "sync-plans/" + planId + ".json")
+                        require(draftFile.isFile) { "Selected-file plan not found; run Diff Check again" }
+                        val draft = SyncJobDraft.fromJson(draftFile.readText())
                         val mapping = settings.mappings().firstOrNull { it.id == mappingId }
                             ?: error("Mapping not found")
-                        check(mapping.ready && mapping.serverId == serverId) { "Mapping is incomplete or changed" }
+                        check(mapping.ready && mapping.serverId == serverId &&
+                            draft.comparison.mapping == mapping) {
+                            "Mapping changed since Diff Check; check again"
+                        }
                         check(com.dimka.ftpmanager.remote.isWithinRoot(mapping.ftpPath, server.root)) {
                             "Mapped FTP path outside site root"
+                        }
+                        val direction = if (action == SYNC_GITHUB_TO_FTP)
+                            SyncDirection.GITHUB_TO_FTP else SyncDirection.FTP_TO_GITHUB
+                        check(draft.direction == direction) { "Wrong direction in selection" }
+                        val chosen = draft.comparison.files.filter { it.relative in draft.selection }
+                        check(chosen.isNotEmpty() && chosen.size == draft.selection.size) {
+                            "Selected file list is invalid"
+                        }
+                        check(chosen.size <= SyncPaths.MAX_FILES) { "Too many files in selection" }
+                        check(chosen.none { it.difference == FileDifference.IDENTICAL ||
+                            it.difference == FileDifference.TOO_LARGE }) {
+                            "Selection includes identical or unsupported files"
+                        }
+                        // A fresh comparison before ANY mutations detects drift since user review.
+                        val fresh = SyncComparisonEngine.compare(applicationContext, mapping, server,
+                            checkpoint = ::checkpoint)
+                        val actual = fresh.files.associateBy { it.relative }
+                        chosen.forEach { source ->
+                            val now = actual[source.relative]
+                                ?: error("File disappeared after Diff Check: " + source.relative)
+                            check(now.githubSha == source.githubSha && now.ftpSha == source.ftpSha) {
+                                "File changed since Diff Check: " + source.relative +
+                                    ". Sync cancelled; recheck before retry."
+                            }
                         }
                         val github = GitHubClient(GitHubOAuth.accessToken(applicationContext))
-                        val chosen = github.tree(mapping.repository, mapping.branch).mapNotNull { entry ->
-                            SyncPaths.relative(entry.path, mapping.githubPath, mapping.githubDirectory)
-                                ?.let { it to entry.path }
-                        }
-                        check(chosen.isNotEmpty()) { "No GitHub files for the selected mapping" }
-                        check(chosen.size <= SyncPaths.MAX_FILES) { "Too many files; choose a smaller mapping" }
-                        val targetFolder = if (mapping.ftpDirectory) mapping.ftpPath
-                            else mapping.ftpPath.substringBeforeLast('/', "/").ifBlank { "/" }
-                        val stage = File(temp, "git-to-ftp").apply { mkdirs() }
-                        val files = chosen.mapIndexed { i, (relative, gitPath) ->
-                            checkpoint()
-                            val local = File(stage, "file-$i")
-                            github.download(mapping.repository, mapping.branch, gitPath, local)
-                            report(i + 1, chosen.size * 2, "GitHub → FTP: скачивание")
-                            val destinationRelative = if (mapping.ftpDirectory) relative
-                                else mapping.ftpPath.substringAfterLast('/')
-                            destinationRelative to local
-                        }
-                        val backup = FileOperations.uploadWithBackup(
-                            applicationContext, session, targetFolder, files, temp,
-                            { now, _ -> report(chosen.size + now, chosen.size * 2, "GitHub → FTP: загрузка") },
-                            ::checkpoint
-                        )
-                        "Передано ${chosen.size} файлов. Бэкап: " + (backup?.toString() ?: "новые файлы")
-                    }
-                    SYNC_FTP_TO_GITHUB -> {
-                        val mappingId = inputData.getString(MAPPING_ID) ?: error("Missing mapping")
-                        val mapping = settings.mappings().firstOrNull { it.id == mappingId }
-                            ?: error("Mapping not found")
-                        check(mapping.ready && mapping.serverId == serverId) { "Mapping is incomplete or changed" }
-                        check(com.dimka.ftpmanager.remote.isWithinRoot(mapping.ftpPath, server.root)) {
-                            "Mapped FTP path outside site root"
-                        }
-                        val source = if (mapping.ftpDirectory) {
-                            FileOperations.scan(session, mapping.ftpPath, checkpoint = ::checkpoint).files
+                        val stage = File(temp, "mapped-sync").apply { mkdirs() }
+                        if (direction == SyncDirection.GITHUB_TO_FTP) {
+                            check(chosen.all { it.githubSha.isNotBlank() }) {
+                                "No GitHub source for one or more selected files"
+                            }
+                            val staged = chosen.mapIndexed { index, file ->
+                                checkpoint()
+                                val local = File(stage, "git-$index")
+                                github.download(mapping.repository, mapping.branch, file.githubPath, local)
+                                check(local.length() <= SyncComparisonEngine.MAX_FILE_BYTES &&
+                                    SyncComparisonEngine.gitBlobHash(local) == file.githubSha) {
+                                    "GitHub file changed while downloading: " + file.githubPath
+                                }
+                                report(index + 1, chosen.size * 2, "Скачивание из GitHub")
+                                val relativeTarget = if (mapping.ftpDirectory) file.relative
+                                    else mapping.ftpPath.substringAfterLast('/')
+                                relativeTarget to local
+                            }
+                            val folder = if (mapping.ftpDirectory) mapping.ftpPath
+                                else mapping.ftpPath.substringBeforeLast('/', "/").ifBlank { "/" }
+                            val expected = chosen.associate { file ->
+                                (if (mapping.ftpDirectory) file.relative
+                                    else mapping.ftpPath.substringAfterLast('/')) to file.ftpSha
+                            }
+                            val backup = FileOperations.uploadWithBackup(
+                                applicationContext, session, folder, staged, temp,
+                                { now, _ -> report(chosen.size + now, chosen.size * 2, "Передача на FTP") },
+                                ::checkpoint, expected
+                            )
+                            settings.updateCheckStatus(mapping.id) {
+                                it.copy(status = "UNKNOWN", syncedAt = System.currentTimeMillis(),
+                                    error = "")
+                            }
+                            "Передано только отличающихся файлов: " + chosen.size +
+                                ". Бэкап: " + (backup?.toString() ?: "не требуется")
                         } else {
-                            check(session.existsFile(mapping.ftpPath)) { "FTP file not found" }
-                            listOf(FileOperations.RemoteFile(
-                                mapping.ftpPath, mapping.ftpPath.substringAfterLast('/'), 0L
-                            ))
+                            check(chosen.all { it.ftpSha.isNotBlank() }) {
+                                "No FTP source for one or more selected files"
+                            }
+                            val staged = chosen.mapIndexed { index, file ->
+                                checkpoint()
+                                val local = File(stage, "ftp-$index")
+                                session.download(file.ftpPath, local)
+                                check(local.length() <= SyncComparisonEngine.MAX_FILE_BYTES &&
+                                    SyncComparisonEngine.gitBlobHash(local) == file.ftpSha) {
+                                    "FTP file changed while downloading: " + file.ftpPath
+                                }
+                                report(index + 1, chosen.size * 2 + 1, "Скачивание с FTP")
+                                file.githubPath to local
+                            }
+                            val sha = github.commitFiles(mapping.repository, mapping.branch, staged,
+                                "Sync FTP → GitHub: " + mapping.name,
+                                { now, _ -> report(chosen.size + now, chosen.size * 2 + 1,
+                                    "Коммит в GitHub") },
+                                chosen.associate { it.githubPath to it.githubSha }
+                            )
+                            settings.updateCheckStatus(mapping.id) {
+                                it.copy(status = "UNKNOWN", syncedAt = System.currentTimeMillis(),
+                                    error = "")
+                            }
+                            "Передано только отличающихся файлов: " + chosen.size +
+                                ". GitHub commit: " + sha
                         }
-                        check(source.isNotEmpty()) { "No FTP files for the selected mapping" }
-                        check(source.size <= SyncPaths.MAX_FILES) { "Too many files; choose a smaller mapping" }
-                        val stage = File(temp, "ftp-to-git").apply { mkdirs() }
-                        val files = source.mapIndexed { i, record ->
-                            checkpoint()
-                            check(record.size <= 20L * 1024 * 1024) { "File too large for GitHub: " + record.relative }
-                            val local = File(stage, "file-$i")
-                            session.download(record.path, local)
-                            check(local.length() <= 20L * 1024 * 1024) { "File too large for GitHub: " + record.relative }
-                            report(i + 1, source.size * 2 + 1, "FTP → GitHub: скачивание")
-                            SyncPaths.githubDestination(mapping, record.relative) to local
-                        }
-                        val github = GitHubClient(GitHubOAuth.accessToken(applicationContext))
-                        val sha = github.commitFiles(
-                            mapping.repository, mapping.branch, files,
-                            "Sync FTP → GitHub: " + mapping.name
-                        ) { now, _ ->
-                            report(source.size + now, source.size * 2 + 1, "FTP → GitHub: коммит")
-                        }
-                        "GitHub commit: " + sha
                     }
                     DEPLOY -> {
                         val repo = inputData.getString(REPO) ?: error("Missing repository")
@@ -249,6 +287,9 @@ class TransferWorker(appContext: Context, params: WorkerParameters) : CoroutineW
         } catch (e: Exception) {
             Result.failure(workDataOf("error" to (e.message ?: e.javaClass.simpleName)))
         } finally {
+            inputData.getString(SYNC_PLAN)?.takeIf { Regex("[0-9a-fA-F-]{36}").matches(it) }?.let {
+                File(applicationContext.filesDir, "sync-plans/" + it + ".json").delete()
+            }
             temp.deleteRecursively()
         }
     }
