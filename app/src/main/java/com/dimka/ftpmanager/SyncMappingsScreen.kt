@@ -126,6 +126,7 @@ fun SyncMappingsScreen(vm: SyncViewModel) {
             dismissButton = { TextButton(onClick = { delete = null }) { Text("Отмена") } })
     }
     if (vm.picker != null) MappingPickerDialog(vm)
+    if (vm.scopePicker != null) ComparisonScopeDialog(vm)
     vm.preview?.let { state ->
         AlertDialog(onDismissRequest = vm::cancelPreview,
             title = { Text(if (state.direction == SyncDirection.GITHUB_TO_FTP)
@@ -230,6 +231,10 @@ private fun SyncList(vm: SyncViewModel) {
                                     Text("Режим: " + folderModeName(mapping.compareMode),
                                         fontSize = 10.sp,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                if (mapping.githubDirectory && !mapping.scope.all)
+                                    Text("Область: " + mapping.scope.rules.size + " правил выбора",
+                                        fontSize = 10.sp,
+                                        color = MaterialTheme.colorScheme.secondary)
                                 Text((if (mapping.githubDirectory) "📁 " else "📄 ") + mapping.githubPath.ifBlank { "/" } +
                                     " ↔ " + mapping.ftpPath.ifBlank { "/" }, fontSize = 11.sp,
                                     maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -326,6 +331,41 @@ private fun SyncDetail(vm: SyncViewModel, mapping: SyncMapping, onRename: () -> 
                 if (mapping.ftpPicked) (if (mapping.ftpDirectory) "📁 " else "📄 ") +
                     mapping.ftpPath else "Файл/папка не выбраны",
                 onChoose = { vm.beginFtp(mapping.id) })
+        }
+        if (mapping.githubDirectory && mapping.ftpDirectory) item {
+            OutlinedCard(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                    Text("Область сравнения", fontWeight = FontWeight.SemiBold)
+                    Text(if (mapping.scope.all) "Все папки и файлы"
+                        else "Свой выбор · " + mapping.scope.rules.size + " правил",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (!mapping.scope.all) {
+                        mapping.scope.rules.take(6).forEach { rule ->
+                            Text((if (rule.included) "✓ " else "× ") +
+                                (if (rule.path.isEmpty()) "/" else rule.path +
+                                    if (rule.directory) "/" else ""),
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        if (mapping.scope.rules.size > 6)
+                            Text("…и ещё " + (mapping.scope.rules.size - 6),
+                                fontSize = 11.sp)
+                    }
+                    OutlinedButton(
+                        onClick = { vm.openScopePicker(mapping.id) },
+                        enabled = mapping.ready && !vm.loading,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.Folder, null)
+                        Text("Выбрать папки и файлы")
+                    }
+                    Text("Сначала выбираем, что сравнивать, потом в Diff Check отмечаем, что переносить. Невыбранные FTP-папки не сканируются.",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
         }
         if (mapping.githubDirectory && mapping.ftpDirectory) item {
             OutlinedCard(Modifier.fillMaxWidth()) {
@@ -450,6 +490,102 @@ private fun EndpointBlock(title: String, location: String, path: String, onChoos
             }
         }
     }
+}
+
+
+@Composable
+private fun ComparisonScopeDialog(vm: SyncViewModel) {
+    val state = vm.scopePicker ?: return
+    val mapping = vm.mappings.firstOrNull { it.id == state.mappingId } ?: return
+    val current = state.location.relative
+    val scope = mapping.scope
+    AlertDialog(
+        onDismissRequest = vm::closeScopePicker,
+        title = { Text("Что сравниваем?") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Файлы и папки относительно выбранной связи GitHub ↔ FTP. Дерево открывается по одному уровню, без полного обхода FTP.",
+                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Путь: /" + current, fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = vm::scopeUp,
+                        enabled = !vm.scopeLoading && state.history.isNotEmpty()) {
+                        Icon(Icons.Default.ArrowBack, null)
+                        Text("Назад")
+                    }
+                    TextButton(onClick = vm::refreshScopeFolder,
+                        enabled = !vm.scopeLoading) {
+                        Icon(Icons.Default.Refresh, null)
+                        Text("Обновить")
+                    }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    TextButton(onClick = { vm.selectEverythingInScope(mapping.id, true) },
+                        enabled = !vm.scopeLoading) { Text("Всё") }
+                    TextButton(onClick = { vm.selectEverythingInScope(mapping.id, false) },
+                        enabled = !vm.scopeLoading) { Text("Снять всё") }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(
+                        checked = scope.isSelected(current, true),
+                        enabled = !vm.scopeLoading,
+                        onCheckedChange = { vm.selectScope(mapping.id, current, true, it) }
+                    )
+                    Text("Эта папка целиком", fontSize = 12.sp)
+                }
+                if (vm.scopeLoading) LinearProgressIndicator(Modifier.fillMaxWidth())
+                if (vm.scopeError.isNotBlank()) {
+                    Text(vm.scopeError, fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
+                }
+                if (!vm.scopeLoading && vm.scopeEntries.isEmpty() && vm.scopeError.isBlank()) {
+                    Text("Папка пуста или файлов нет на обеих сторонах.",
+                        fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                LazyColumn(Modifier.heightIn(max = 355.dp),
+                    verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    items(vm.scopeEntries, key = { it.relative }) { item ->
+                        Row(Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(
+                                checked = scope.isSelected(item.relative, item.directory),
+                                enabled = !vm.scopeLoading,
+                                onCheckedChange = {
+                                    vm.selectScope(mapping.id, item.relative, item.directory, it)
+                                }
+                            )
+                            Icon(if (item.directory) Icons.Default.Folder
+                                else Icons.Default.InsertDriveFile, null)
+                            Column(Modifier.weight(1f).padding(start = 6.dp)) {
+                                Text(item.name, fontSize = 12.sp,
+                                    maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                Text(
+                                    (if (item.onGithub) "GitHub" else "") +
+                                    (if (item.onGithub && item.onFtp) " · " else "") +
+                                    (if (item.onFtp) "FTP" else ""),
+                                    fontSize = 10.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            if (item.directory) TextButton(
+                                enabled = !vm.scopeLoading,
+                                onClick = { vm.enterScopeFolder(item) }
+                            ) { Text("Открыть") }
+                        }
+                        HorizontalDivider()
+                    }
+                }
+                Text(if (scope.all) "Сейчас включён весь каталог."
+                    else "Настроено правил: " + scope.rules.size +
+                        ". Выбор сохраняется сразу, Diff Check нужно запустить заново.",
+                    fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        },
+        confirmButton = {
+            Button(onClick = vm::closeScopePicker) { Text("Готово") }
+        }
+    )
 }
 
 @Composable
