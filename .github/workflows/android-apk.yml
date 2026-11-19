@@ -32,27 +32,71 @@ jobs:
           test -n "$SDKMANAGER"
           yes | "$SDKMANAGER" --licenses > /dev/null || true
           "$SDKMANAGER" 'platforms;android-35' 'build-tools;35.0.0'
+      # Secrets must never be exposed to pull_request builds.
+      - name: Prepare stable signing if installed
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+        env:
+          KEYSTORE_B64: ${{ secrets.DIMKA_KEYSTORE_B64 }}
+          STORE_PASS: ${{ secrets.DIMKA_STORE_PASSWORD }}
+          KEY_PASS: ${{ secrets.DIMKA_KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.DIMKA_KEY_ALIAS }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            for value in "$STORE_PASS" "$KEY_PASS" "$KEY_ALIAS"; do
+              if [ -z "$value" ]; then
+                echo "::error::Incomplete stable signing secrets; configure all four DIMKA_* secrets."
+                exit 1
+              fi
+            done
+            printf '%s' "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/dimka-stable-signing.p12"
+            chmod 600 "$RUNNER_TEMP/dimka-stable-signing.p12"
+            echo "DIMKA_SIGNING_FILE=$RUNNER_TEMP/dimka-stable-signing.p12" >> "$GITHUB_ENV"
+            echo "DIMKA_SIGNING_STORE_PASSWORD=$STORE_PASS" >> "$GITHUB_ENV"
+            echo "DIMKA_SIGNING_KEY_PASSWORD=$KEY_PASS" >> "$GITHUB_ENV"
+            echo "DIMKA_SIGNING_ALIAS=$KEY_ALIAS" >> "$GITHUB_ENV"
+            echo "DIMKA_SIGNING_MODE=stable-signed" >> "$GITHUB_ENV"
+          else
+            if [ -n "$STORE_PASS" ] || [ -n "$KEY_PASS" ] || [ -n "$KEY_ALIAS" ]; then
+              echo "::error::Incomplete signing configuration: keystore is missing."
+              exit 1
+            fi
+            echo "DIMKA_SIGNING_MODE=temporary-debug" >> "$GITHUB_ENV"
+            echo "::warning::No permanent signing key; debug APK updates may require reinstall."
+          fi
       - name: Compile and test
-        run: gradle --no-daemon :app:assembleDebug :app:testDebugUnitTest
+        shell: bash
+        run: |
+          gradle --no-daemon :app:assembleDebug :app:testDebugUnitTest
+          if [ "$DIMKA_SIGNING_MODE" = "stable-signed" ]; then
+            gradle --no-daemon :app:assembleRelease
+            cp app/build/outputs/apk/release/app-release.apk DimkaFtpManager.apk
+          else
+            cp app/build/outputs/apk/debug/app-debug.apk DimkaFtpManager.apk
+          fi
       - name: Upload installable APK
         uses: actions/upload-artifact@v4
         with:
-          name: DimkaFtpManager-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: DimkaFtpManager-apk
+          path: DimkaFtpManager.apk
           retention-days: 30
           if-no-files-found: error
       - name: Publish standalone APK to GitHub Releases
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
         env:
           GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
-          cp app/build/outputs/apk/debug/app-debug.apk DimkaFtpManager.apk
-          DESCRIPTION="Latest successful debug APK from commit ${GITHUB_SHA}. Build ${GITHUB_RUN_NUMBER}. For testing; not Play Store-signed."
+          PRIOR_NOTES="$(gh release view android-latest --json body --jq '.body' 2>/dev/null || true)"
+          if [ "$DIMKA_SIGNING_MODE" != "stable-signed" ] && [[ "$PRIOR_NOTES" == *"[stable-signed]"* ]]; then
+            echo "::error::Refusing to replace a stable-signed release with temporary debug signing."
+            exit 1
+          fi
+          DESCRIPTION="Latest APK from commit $GITHUB_SHA. Build $GITHUB_RUN_NUMBER. [$DIMKA_SIGNING_MODE]"
           if gh release view android-latest >/dev/null 2>&1; then
             gh release upload android-latest DimkaFtpManager.apk --clobber
             gh release edit android-latest --notes "$DESCRIPTION"
           else
             gh release create android-latest DimkaFtpManager.apk --target "$GITHUB_SHA" --title "DimkaFtpManager — latest APK" --notes "$DESCRIPTION" --latest
           fi
-          echo "Direct APK: https://github.com/${GITHUB_REPOSITORY}/releases/download/android-latest/DimkaFtpManager.apk" >> "$GITHUB_STEP_SUMMARY"
-
+          echo "APK signing: $DIMKA_SIGNING_MODE" >> "$GITHUB_STEP_SUMMARY"
+          echo "Direct APK: https://github.com/$GITHUB_REPOSITORY/releases/download/android-latest/DimkaFtpManager.apk" >> "$GITHUB_STEP_SUMMARY"

@@ -4,7 +4,26 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// Stable APK signing uses an externally supplied private keystore (never committed).
+val dimkaSigningPath = System.getenv("DIMKA_SIGNING_FILE")
+val dimkaSigningStorePassword = System.getenv("DIMKA_SIGNING_STORE_PASSWORD")
+val dimkaSigningAlias = System.getenv("DIMKA_SIGNING_ALIAS")
+val dimkaSigningKeyPassword = System.getenv("DIMKA_SIGNING_KEY_PASSWORD")
+val dimkaHasStableSigning = listOf(dimkaSigningPath, dimkaSigningStorePassword,
+    dimkaSigningAlias, dimkaSigningKeyPassword).all { !it.isNullOrBlank() }
+
 android {
+    signingConfigs {
+        if (dimkaHasStableSigning) {
+            create("persistent") {
+                storeFile = file(dimkaSigningPath!!)
+                storePassword = dimkaSigningStorePassword!!
+                keyAlias = dimkaSigningAlias!!
+                keyPassword = dimkaSigningKeyPassword!!
+                storeType = "pkcs12"
+            }
+        }
+    }
     namespace = "com.dimka.ftpmanager"
     compileSdk = 35
 
@@ -12,12 +31,17 @@ android {
         applicationId = "com.dimka.ftpmanager"
         minSdk = 29
         targetSdk = 35
-        versionCode = 7
-        versionName = "0.6.0"
+        versionCode = 8
+        versionName = "0.7.0"
     }
 
     buildTypes {
-        release { isMinifyEnabled = false }
+        release {
+            isMinifyEnabled = false
+            if (dimkaHasStableSigning) {
+                signingConfig = signingConfigs.getByName("persistent")
+            }
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

@@ -2,7 +2,7 @@
 
 Native, local-first Android FTP / FTPS / SFTP + GitHub file deployment tool. No server or DPM required.
 
-## Functions (v0.5.0)
+## Functions (v0.7.0)
 
 - Save and test multiple FTP/FTPS/SFTP connections, navigate remote folders.
 - Import FileZilla Site Manager XML on Android with a confirmation preview. Duplicate connections are merged by protocol, host, port, and username. Matching saved servers keep their IDs, names, root paths, and any passwords missing from the XML. Conflicting passwords in duplicate XML entries are reported in the preview; the last nonblank value wins. Implicit FTPS is also supported. The XML is never uploaded anywhere.
@@ -44,13 +44,30 @@ In **Settings → FTP / FTPS / SFTP → Import sites from FileZilla (XML)** sele
 
 CI uses Gradle installed by `gradle/actions/setup-gradle`, so no untracked binary wrapper JAR is needed.
 
+## Full JSON backup and restore (v0.7)
+
+Open **Настройки → Резервная копия приложения**:
+- **Экспортировать всё (JSON)**: saves a portable, *unencrypted* JSON backup using Android's file picker. Includes FTP/FTPS/SFTP hosts and passwords, GitHub OAuth access/refresh tokens and PAT, mappings and comparison modes, check statuses/timestamps, ignore rules and pinned SFTP server fingerprints. No credentials are omitted.
+- **Импортировать всё (JSON)**: choose a backup file, review contents and confirm overwrite. Replaces all settings and refreshes the live UI. The original Android Keystore key is NOT exported; credentials are encrypted anew on the target device.
+- **Security:** JSON includes live credentials in plaintext. Do not commit it, share it or store it on a public drive. It does not include downloaded ZIP files or the Android WorkManager execution history.
+
+## Installable APK signing
+
+After configuring all four GitHub Actions repository secrets — `DIMKA_KEYSTORE_B64`, `DIMKA_STORE_PASSWORD`, `DIMKA_KEY_ALIAS`, `DIMKA_KEY_PASSWORD` — CI publishes a **stable-signed release APK** instead of a temporary debug APK.
+
+One-time setup on your OWN computer: use [PowerShell](scripts/setup-apk-signing.ps1) on Windows or [Bash](scripts/setup-apk-signing.sh) on Linux/macOS/WSL. You need JDK, GitHub CLI and `gh auth login`. The script creates a private signing keystore locally, backs up its password locally, and uploads all four secrets. The private key must NEVER be checked into Git.
+
+**First-time migration:** all existing APKs used ephemeral Android debug keys, so the first stable-signed APK cannot install over a differently signed installation. Preserve whatever configuration is possible before uninstalling the previous APK. After installing a stable-signed APK, subsequent updates signed by the same key retain app data.
+
+Until secrets are configured, GitHub Actions still publishes temporary-debug APKs. The latest release description explicitly shows `[temporary-debug]` or `[stable-signed]`. Once a stable APK is released, CI refuses to replace it with an ephemeral debug-signed APK.
+
 ## Limitations
 
 - No fully automatic sync, delete mirroring or merge conflict resolver. ZIP uploads only add/replace files; they do not delete other server files.
 - GitHub import/commit supports source files up to 20 MiB each and rejects files matching sensitive patterns. Inspect import preview and ignore rules before confirmation. It does not guarantee detection of every secret.
 - FTP is unencrypted; use FTPS or SFTP wherever available.
 - Transfers can be interrupted by Android process restrictions; operations show failed status, and you can safely run them again.
-- The debug APK is not signed for Play Store distribution; it uses the Android debug key for manual installation. Its signing key can vary across GitHub Actions runners; if Android rejects an update due to conflicting signatures, uninstall the old debug APK (this erases app data).
+- Before configuring permanent signing, debug APKs may require reinstall because Android checks signing certificates. Stable-signed releases preserve app data across future updates; protect the signing keystore.
 
 ## Content-aware synchronization (v0.5)
 
