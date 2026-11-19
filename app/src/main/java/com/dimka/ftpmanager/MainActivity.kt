@@ -599,11 +599,28 @@ private fun ServerDialog(
                         FilterChip(selected = protocol == kind, onClick = {
                             val previous = protocol
                             protocol = kind
-                            if ((previous == "SFTP" && port == "22") || (previous != "SFTP" && port == "21"))
-                                port = if (kind == "SFTP") "22" else "21"
+                            val previousDefault = when (previous) {
+                                "SFTP" -> "22"
+                                "FTPS_IMPLICIT" -> "990"
+                                else -> "21"
+                            }
+                            if (port == previousDefault) port = if (kind == "SFTP") "22" else "21"
                         }, label = { Text(kind) })
                     }
                 }
+                FilterChip(
+                    selected = protocol == "FTPS_IMPLICIT",
+                    onClick = {
+                        val previousDefault = when (protocol) {
+                            "SFTP" -> "22"
+                            "FTPS_IMPLICIT" -> "990"
+                            else -> "21"
+                        }
+                        if (port == previousDefault) port = "990"
+                        protocol = "FTPS_IMPLICIT"
+                    },
+                    label = { Text("FTPS implicit (порт 990)") }
+                )
                 OutlinedTextField(name, { name = it }, label = { Text("Название") }, singleLine = true)
                 OutlinedTextField(host, { host = it }, label = { Text("Хост / IP") }, singleLine = true)
                 OutlinedTextField(port, { port = it }, label = { Text("Порт") }, singleLine = true,
