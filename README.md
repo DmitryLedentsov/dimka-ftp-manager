@@ -2,7 +2,7 @@
 
 Native, local-first Android FTP / FTPS / SFTP + GitHub file deployment tool. No server or DPM required.
 
-## Functions (v0.4.0)
+## Functions (v0.5.0)
 
 - Save and test multiple FTP/FTPS/SFTP connections, navigate remote folders.
 - Import FileZilla Site Manager XML on Android with a confirmation preview. Duplicate connections are merged by protocol, host, port, and username. Matching saved servers keep their IDs, names, root paths, and any passwords missing from the XML. Conflicting passwords in duplicate XML entries are reported in the preview; the last nonblank value wins. Implicit FTPS is also supported. The XML is never uploaded anywhere.
@@ -12,7 +12,7 @@ Native, local-first Android FTP / FTPS / SFTP + GitHub file deployment tool. No 
 - Create any number of named **GitHub ↔ FTP mappings**. Each mapping independently chooses GitHub repository/branch/file or folder, and FTP/FTPS/SFTP host/file or folder.
 - Two manual directions: **GitHub → FTP** (with backup ZIP before overwrites) and **FTP → GitHub** (one Git commit for the selected files).
 - File-to-file and folder-to-folder mappings only. Folder contents keep their relative paths even when GitHub and FTP have different parent directories. No delete mirroring.
-- Before either operation, the app previews the number and sample paths of existing/new target files. This compares path existence, not hashes/content. It is not a full merge conflict detector.
+- Each mapping has a compact dashboard row with status (matches/changed/error/not checked), last check timestamp and a one-tap Check button. Tap the row to open a detailed screen with a Back button, endpoint editors and Diff Check. Check All checks mappings sequentially.
 - Legacy importer API remains in the code, but the primary GitHub screen now manages the saved mappings.
 - Transfers run in Android WorkManager with a foreground notification and progress; failed jobs are visible in the history and can be restarted from the source action. Re-running retries at file level rather than resuming an arbitrary FTP stream byte-for-byte.
 
@@ -51,3 +51,10 @@ CI uses Gradle installed by `gradle/actions/setup-gradle`, so no untracked binar
 - FTP is unencrypted; use FTPS or SFTP wherever available.
 - Transfers can be interrupted by Android process restrictions; operations show failed status, and you can safely run them again.
 - The debug APK is not signed for Play Store distribution; it uses the Android debug key for manual installation. Its signing key can vary across GitHub Actions runners; if Android rejects an update due to conflicting signatures, uninstall the old debug APK (this erases app data).
+
+## Content-aware synchronization (v0.5)
+
+- Diff Check downloads the selected FTP file(s) into private temporary storage to compute Git-style blob SHA-1 and compares it to GitHub tree blob IDs. Same-content files are never transferred. Folder comparisons list only changed or one-sided files, with per-file text diff and checkboxes. UTF-8 text diff is limited to 256 KiB and 1,400 lines; binaries and files exceeding 20 MiB are not uploaded by the sync task.
+- Source-only files on the opposite side are **not deleted**. Only checked changed/new files available in the chosen source direction are transferred. FTP uploads back up overwritten files to Downloads/DimkaFtpManager/Backups. FTP → GitHub produces a single commit with only selected files.
+- Before applying, WorkManager rechecks current files' hashes against the preview snapshot; FTP targets are also verified immediately before uploading. Changed GitHub blob IDs in target paths cause FTP → GitHub to abort. If files have changed between check and write, the job fails rather than silently overriding edits. FTP does not support atomic compare-and-swap, so a tiny last-moment concurrency window remains.
+- Checks can be slow for large folders: FTP requires reading each file to compare exact contents. No server-side daemon. Statuses and check/sync timestamps persist on-device. A sync marks status as needing a new check until Check is run again.
