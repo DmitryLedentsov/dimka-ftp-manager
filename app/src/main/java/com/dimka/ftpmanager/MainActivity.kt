@@ -163,6 +163,43 @@ private fun MainScreen(vm: MainViewModel) {
         AlertDialog(onDismissRequest = vm::dismissMessage, title = { Text("DimkaFtpManager") },
             text = { Text(msg) }, confirmButton = { TextButton(onClick = vm::dismissMessage) { Text("OK") } })
     }
+    vm.fileZillaPlan?.let { plan ->
+        AlertDialog(
+            onDismissRequest = vm::cancelFileZillaImport,
+            title = { Text("Импорт сайтов FileZilla") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Найдено записей: ${plan.entriesRead}")
+                    Text("Добавить: ${plan.added} • Обновить: ${plan.updated} • Без изменений: ${plan.unchanged}")
+                    if (plan.duplicateEntries > 0) {
+                        Text("Повторов одного подключения в XML: ${plan.duplicateEntries} (объединены)")
+                    }
+                    if (plan.skipped > 0) {
+                        Text("Пропущено неподдерживаемых или некорректных записей: ${plan.skipped}")
+                    }
+                    if (plan.passwordsNeeded > 0) {
+                        Text("Подключений без сохранённого пароля: ${plan.passwordsNeeded}. Пароль можно указать вручную.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    if (plan.examples.isNotEmpty()) {
+                        Text("Примеры изменений:", fontWeight = FontWeight.SemiBold)
+                        plan.examples.forEach { Text("• " + it, fontSize = 12.sp) }
+                    }
+                    Text("Совпадение определяется по протоколу, хосту, порту и логину. Названия, ID, корневые папки и пароли, которых нет в XML, сохраняются.",
+                        fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = plan.added + plan.updated > 0,
+                    onClick = vm::confirmFileZillaImport
+                ) { Text("Применить") }
+            },
+            dismissButton = {
+                TextButton(onClick = vm::cancelFileZillaImport) { Text("Отмена") }
+            }
+        )
+    }
     vm.importSummary?.let { summary ->
         AlertDialog(onDismissRequest = vm::clearImportSummary,
             title = { Text("Первый импорт в GitHub") },
@@ -409,6 +446,9 @@ private fun JobsScreen() {
 @Composable
 private fun SettingsScreen(vm: MainViewModel) {
     val context = LocalContext.current
+    val fileZillaPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) vm.previewFileZilla(uri)
+    }
     var repoMenuExpanded by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<ServerProfile?>(null) }
     var adding by remember { mutableStateOf(false) }
@@ -422,6 +462,17 @@ private fun SettingsScreen(vm: MainViewModel) {
             Text("FTP / FTPS / SFTP", modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
             Button(onClick = { adding = true; editing = null }) { Icon(Icons.Default.Add, null); Text("Сервер") }
         }
+        OutlinedButton(
+            onClick = { fileZillaPicker.launch(arrayOf("text/xml", "application/xml", "*/*")) },
+            modifier = Modifier.fillMaxWidth(),
+            enabled = !vm.isLoading
+        ) {
+            Icon(Icons.Default.FolderOpen, contentDescription = null)
+            Spacer(Modifier.size(8.dp))
+            Text("Импорт сайтов из FileZilla (XML)")
+        }
+        Text("Подключения из XML обновят совпадающие серверы и добавят новые. Сначала покажем результат, затем попросим подтвердить.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         vm.servers.forEach { profile ->
             OutlinedCard(Modifier.fillMaxWidth()) {
                 Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
