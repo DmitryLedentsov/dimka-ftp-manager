@@ -15,6 +15,11 @@ import com.dimka.ftpmanager.data.SyncDirection
 import com.dimka.ftpmanager.data.SyncMapping
 import com.dimka.ftpmanager.data.SyncPaths
 import com.dimka.ftpmanager.data.SyncPreview
+import com.dimka.ftpmanager.data.MappingComparison
+import com.dimka.ftpmanager.data.ComparedFile
+import com.dimka.ftpmanager.data.FileDifference
+import com.dimka.ftpmanager.data.CheckStatus
+import com.dimka.ftpmanager.data.SyncJobDraft
 import com.dimka.ftpmanager.github.GitHubClient
 import com.dimka.ftpmanager.github.GitHubOAuth
 import com.dimka.ftpmanager.remote.RemoteClient
@@ -22,6 +27,10 @@ import com.dimka.ftpmanager.remote.cleanRemotePath
 import com.dimka.ftpmanager.remote.isWithinRoot
 import com.dimka.ftpmanager.transfer.FileOperations
 import com.dimka.ftpmanager.transfer.TransferWorker
+import com.dimka.ftpmanager.transfer.SyncComparisonEngine
+import com.dimka.ftpmanager.transfer.TextDiff
+import java.io.File
+import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -56,6 +65,152 @@ class SyncViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var message by mutableStateOf<String?>(null)
         private set
+
+    var activeId by mutableStateOf<String?>(null)
+        private set
+    var statuses by mutableStateOf(store.checkStatuses())
+        private set
+    var comparison by mutableStateOf<MappingComparison?>(null)
+        private set
+    var selectedPaths by mutableStateOf<Set<String>>(emptySet())
+        private set
+    var checkingId by mutableStateOf<String?>(null)
+        private set
+    var checkAllRunning by mutableStateOf(false)
+        private set
+    var checkProgress by mutableStateOf("")
+        private set
+    var diffFile by mutableStateOf<ComparedFile?>(null)
+        private set
+    var diffResult by mutableStateOf<TextDiff.Preview?>(null)
+        private set
+    var diffBusy by mutableStateOf(false)
+        private set
+
+    fun openMapping(id: String) {
+        statuses = store.checkStatuses()
+        activeId = id
+        comparison = null
+        selectedPaths = emptySet()
+    }
+    fun closeMapping() {
+        activeId = null
+        comparison = null
+        selectedPaths = emptySet()
+        diffFile = null
+        diffResult = null
+    }
+    fun refreshStatuses() { statuses = store.checkStatuses() }
+    fun closeDiff() { diffFile = null; diffResult = null }
+
+    private fun recordCheck(id: String, result: MappingComparison) {
+        val old = store.checkStatuses()[id] ?: CheckStatus(id)
+        val state = if (result.blocked > 0) "WARNING" else if (result.synchronized) "MATCH" else "CHANGED"
+        val newStatus = old.copy(status = state, checkedAt = result.checkedAt,
+            matching = result.matching, changed = result.changes, error = "")
+        store.updateCheckStatus(id) { newStatus }
+        statuses = store.checkStatuses()
+        if (activeId == id) {
+            comparison = result
+            selectedPaths = result.files.filter {
+                it.difference == FileDifference.CHANGED ||
+                    it.difference == FileDifference.ONLY_GITHUB ||
+                    it.difference == FileDifference.ONLY_FTP
+            }.map { it.relative }.toSet()
+        }
+    }
+    private fun checkError(id: String, error: Exception) {
+        store.updateCheckStatus(id) {
+            it.copy(status = "ERROR", error = error.message ?: error.javaClass.simpleName)
+        }
+        statuses = store.checkStatuses()
+        if (activeId == id) {
+            comparison = null
+            selectedPaths = emptySet()
+        }
+    }
+    fun checkMapping(id: String) {
+        if (loading || checkAllRunning) return
+        val mapping = mappings.firstOrNull { it.id == id } ?: return
+        if (!mapping.ready) { message = "Сначала настрой оба пути"; return }
+        loading = true
+        checkingId = id
+        checkProgress = "Сканирование GitHub и FTP…"
+        viewModelScope.launch {
+            try {
+                val result = withContext(Dispatchers.IO) {
+                    SyncComparisonEngine.compare(getApplication(), mapping, { done, total ->
+                        // State update stays on the main thread; IO callback runs on Default/IO.
+                        checkProgress = "Проверено " + done + " / " + total
+                    })
+                }
+                if (mappings.any { it == mapping }) recordCheck(id, result)
+                else message = "Соответствие изменилось во время проверки, повтори."
+            } catch (e: Exception) {
+                checkError(id, e)
+                message = "Проверка: " + e.message
+            } finally {
+                checkingId = null
+                loading = false
+                checkProgress = ""
+            }
+        }
+    }
+    fun checkAll() {
+        if (loading || checkAllRunning) return
+        checkAllRunning = true
+        loading = true
+        val batch = mappings.filter { it.ready }.toList()
+        viewModelScope.launch {
+            try {
+                for ((index, mapping) in batch.withIndex()) {
+                    checkingId = mapping.id
+                    checkProgress = "Задача " + (index + 1) + " / " + batch.size + ": " + mapping.name
+                    try {
+                        val result = withContext(Dispatchers.IO) {
+                            SyncComparisonEngine.compare(getApplication(), mapping)
+                        }
+                        if (mappings.any { it == mapping }) recordCheck(mapping.id, result)
+                    } catch (e: Exception) {
+                        checkError(mapping.id, e)
+                    }
+                }
+            } finally {
+                checkingId = null
+                loading = false
+                checkAllRunning = false
+                checkProgress = ""
+            }
+        }
+    }
+    fun toggleFile(relative: String) {
+        selectedPaths = if (relative in selectedPaths) selectedPaths - relative else selectedPaths + relative
+    }
+    fun setAllFiles(value: Boolean) {
+        val check = comparison ?: return
+        selectedPaths = if (value) check.files.filter {
+            it.difference in setOf(FileDifference.CHANGED,
+                FileDifference.ONLY_GITHUB, FileDifference.ONLY_FTP)
+        }.map { it.relative }.toSet() else emptySet()
+    }
+    fun openDiff(file: ComparedFile) {
+        val checked = comparison ?: return
+        diffFile = file
+        diffResult = null
+        diffBusy = true
+        viewModelScope.launch {
+            try {
+                diffResult = withContext(Dispatchers.IO) {
+                    SyncComparisonEngine.diff(getApplication(), checked, file)
+                }
+            } catch (e: Exception) {
+                diffResult = TextDiff.Preview(emptyList(),
+                    e.message ?: "Не удалось построить diff")
+            } finally {
+                diffBusy = false
+            }
+        }
+    }
 
     fun dismissMessage() { message = null }
     fun cancelPicker() { picker = null }
@@ -199,82 +354,70 @@ class SyncViewModel(app: Application) : AndroidViewModel(app) {
         picker = null
     }
 
+    private fun eligible(check: MappingComparison, direction: SyncDirection): List<ComparedFile> =
+        check.files.filter { file ->
+            file.relative in selectedPaths &&
+                file.difference != FileDifference.IDENTICAL &&
+                file.difference != FileDifference.TOO_LARGE &&
+                if (direction == SyncDirection.GITHUB_TO_FTP) file.githubSha.isNotBlank()
+                else file.ftpSha.isNotBlank()
+        }
+
     fun prepareSync(id: String, direction: SyncDirection) {
         val mapping = mappings.firstOrNull { it.id == id } ?: return
-        if (!mapping.ready) { message = "Выбери файл ↔ файл или папку ↔ папку"; return }
-        val server = store.servers().firstOrNull { it.id == mapping.serverId }
-        if (server == null || !isWithinRoot(mapping.ftpPath, server.root)) {
-            message = "FTP-сервер удалён или корень изменился"; return
+        val checked = comparison
+        if (checked == null || checked.mapping != mapping) {
+            message = "Сначала нажми «Проверить», чтобы сравнить реальные версии файлов"
+            return
         }
-        loading = true
-        preview = null
-        viewModelScope.launch {
-            try {
-                preview = withContext(Dispatchers.IO) {
-                    val git = GitHubClient(GitHubOAuth.accessToken(getApplication()))
-                    val tree = git.tree(mapping.repository, mapping.branch)
-                    val gitPaths = tree.map { it.path }.toSet()
-                    val examples = mutableListOf<String>()
-                    var overwrite = 0
-                    val count: Int
-                    if (direction == SyncDirection.GITHUB_TO_FTP) {
-                        val source = tree.mapNotNull { item ->
-                            SyncPaths.relative(item.path, mapping.githubPath, mapping.githubDirectory)
-                                ?.let { it to item.path }
-                        }
-                        check(source.isNotEmpty()) { "Нет файлов по пути в GitHub" }
-                        check(source.size <= SyncPaths.MAX_FILES) { "Слишком много файлов, выбери подпапку" }
-                        RemoteClient.connect(getApplication(), server).use { ftp ->
-                            for ((relative, _) in source) {
-                                val target = SyncPaths.ftpDestination(mapping, relative)
-                                val exists = runCatching { ftp.existsFile(target) }.getOrDefault(false)
-                                if (exists) overwrite++
-                                if (examples.size < 10) examples.add((if (exists) "Заменить: " else "Добавить: ") + target)
-                            }
-                        }
-                        count = source.size
-                    } else {
-                        val source = RemoteClient.connect(getApplication(), server).use { ftp ->
-                            if (mapping.ftpDirectory) FileOperations.scan(ftp, mapping.ftpPath).files.map { it.relative }
-                            else {
-                                check(ftp.existsFile(mapping.ftpPath)) { "FTP-файл не найден" }
-                                listOf(mapping.ftpPath.substringAfterLast('/'))
-                            }
-                        }
-                        check(source.isNotEmpty()) { "FTP-папка пуста" }
-                        check(source.size <= SyncPaths.MAX_FILES) { "Слишком много файлов, выбери подпапку" }
-                        for (rel in source) {
-                            val target = SyncPaths.githubDestination(mapping, rel)
-                            val exists = target in gitPaths
-                            if (exists) overwrite++
-                            if (examples.size < 10) examples.add((if (exists) "Заменить: " else "Добавить: ") + target)
-                        }
-                        count = source.size
-                    }
-                    SyncPreview(mapping.id, direction, count, overwrite, count - overwrite, examples)
-                }
-            } catch (e: Exception) { message = "Предпросмотр: " + e.message }
-            finally { loading = false }
+        val files = eligible(checked, direction)
+        if (files.isEmpty()) {
+            message = "Нет выбранных изменённых файлов для этого направления"
+            return
         }
+        val replace = files.count {
+            if (direction == SyncDirection.GITHUB_TO_FTP) it.ftpSha.isNotBlank()
+            else it.githubSha.isNotBlank()
+        }
+        preview = SyncPreview(mapping.id, direction, files.size, replace,
+            files.size - replace, files.take(10).map { it.relative })
     }
 
     fun confirmSync() {
         val current = preview ?: return
-        preview = null
+        val checked = comparison ?: return
         val mapping = mappings.firstOrNull { it.id == current.mappingId }
-        if (mapping == null || !mapping.ready) { message = "Соответствие изменилось"; return }
+        preview = null
+        if (mapping == null || checked.mapping != mapping) {
+            message = "Соответствие изменилось. Выполни проверку снова."
+            return
+        }
+        val files = eligible(checked, current.direction)
+        if (files.size != current.count) {
+            message = "Список выбранных файлов изменился. Проверь ещё раз."
+            return
+        }
         val action = if (current.direction == SyncDirection.GITHUB_TO_FTP)
             TransferWorker.SYNC_GITHUB_TO_FTP else TransferWorker.SYNC_FTP_TO_GITHUB
+        val id = UUID.randomUUID().toString()
+        val plans = File(getApplication<Application>().filesDir, "sync-plans").apply { mkdirs() }
+        val target = File(plans, id + ".json")
         try {
+            target.writeText(SyncJobDraft(checked, current.direction,
+                files.map { it.relative }.toSet()).toJson())
             val request = OneTimeWorkRequestBuilder<TransferWorker>()
                 .setInputData(TransferWorker.request(
                     TransferWorker.ACTION to action,
                     TransferWorker.SERVER to mapping.serverId,
                     TransferWorker.REMOTE to mapping.ftpPath,
-                    TransferWorker.MAPPING_ID to mapping.id
+                    TransferWorker.MAPPING_ID to mapping.id,
+                    TransferWorker.SYNC_PLAN to id
                 )).addTag(TransferWorker.TAG).build()
             WorkManager.getInstance(getApplication()).enqueue(request)
-            message = "Задание запущено. Прогресс смотри на вкладке «Задания»."
-        } catch (e: Exception) { message = "Не удалось запустить: " + e.message }
+            message = "Передача запущена. Ход выполнения — вкладка «Задания»."
+        } catch (e: Exception) {
+            target.delete()
+            message = "Не удалось поставить задачу: " + e.message
+        }
     }
 }
