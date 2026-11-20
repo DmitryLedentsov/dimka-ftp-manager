@@ -45,7 +45,7 @@ class DiffCheckTest {
             val result = TextDiff.preview(git, ftp)
             assertEquals(0, result.added)
             assertEquals(0, result.removed)
-            assertTrue(result.note.contains("CRLF/LF"))
+            assertTrue(result.note.contains("LF/CRLF"))
             assertTrue(SyncComparisonEngine.gitBlobHash(git) !=
                 SyncComparisonEngine.gitBlobHash(ftp))
         } finally {
@@ -180,12 +180,17 @@ class DiffCheckTest {
         val ftp = File.createTempFile("dimka-eol-boundary-ftp-", ".js")
         try {
             val prefix = "x".repeat(65535)
-            git.writeText(prefix + "\r\r\nsecond\n")
+            // Uniform CRCRLF can be verified against the Git blob without downloading.
+            git.writeText(prefix + "\r\r\nsecond\r\r\n")
             ftp.writeText(prefix + "\nsecond\n")
             assertTrue(com.dimka.ftpmanager.transfer.LineEndingEquivalence.matchesGitBlob(
                 ftp, SyncComparisonEngine.gitBlobHash(git)))
             assertTrue(com.dimka.ftpmanager.transfer.LineEndingEquivalence.matchesGitBlob(
                 git, SyncComparisonEngine.gitBlobHash(ftp)))
+            // Mixed delimiters require the small-file content fallback.
+            git.writeText(prefix + "\r\r\nsecond\n")
+            assertTrue(com.dimka.ftpmanager.transfer.LineEndingEquivalence.sameNormalizedContent(
+                ftp, git))
         } finally { git.delete(); ftp.delete() }
     }
 
