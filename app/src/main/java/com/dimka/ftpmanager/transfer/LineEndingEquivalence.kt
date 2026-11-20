@@ -8,24 +8,26 @@ import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 
 /**
- * Treat CRLF, LF and lone CR as equivalent *only for valid UTF-8 text*.
- * Other whitespace, encodings, BOMs, trailing newlines and actual content remain significant.
- *
- * Fast path computes both canonical LF and CRLF Git blob hashes from the FTP file
- * using constant memory. No GitHub download is required for typical LF-vs-CRLF changes.
+ * Valid UTF-8 text may differ only in EOL encoding: LF, CRLF and malformed CRCRLF.
+ * Repeated CRs immediately followed by LF constitute ONE logical newline.
+ * Other bytes (including spaces, BOM, and terminal newline presence) are significant.
  */
 object LineEndingEquivalence {
-    private const val LF: Int = 10
-    private const val CR: Int = 13
+    private const val LF = 10
+    private const val CR = 13
+    private val crRunBeforeLf = Regex("\\r+\\n")
 
-    /** Do not classify arbitrary binary data as text. */
+    fun normalizeLineEndings(text: String): String =
+        text.replace(crRunBeforeLf, "\n").replace('\r', '\n')
+
+    /** Reject binary and malformed UTF-8 before declaring line-ending equivalence. */
     fun isUtf8TextWithLineBreak(file: File): Boolean {
         if (!file.isFile || file.length() > SyncComparisonEngine.MAX_FILE_BYTES) return false
         val decoder = StandardCharsets.UTF_8.newDecoder()
             .onMalformedInput(CodingErrorAction.REPORT)
             .onUnmappableCharacter(CodingErrorAction.REPORT)
         return try {
-            var hasNewline = false
+            var hasBreak = false
             InputStreamReader(file.inputStream().buffered(), decoder).use { reader ->
                 val chars = CharArray(8192)
                 while (true) {
@@ -33,108 +35,100 @@ object LineEndingEquivalence {
                     if (n < 0) break
                     for (i in 0 until n) {
                         val c = chars[i]
-                        if (c == '\r' || c == '\n') hasNewline = true
-                        if (c.code < 32 && c != '\r' && c != '\n' &&
-                            c != '\t' && c != '\u000c') return false
-                        if (c == '\u007f') return false
+                        if (c == '\r' || c == '\n') hasBreak = true
+                        if ((c.code < 32 && c != '\r' && c != '\n' &&
+                            c != '\t' && c != '\u000c') || c == '\u007f') return false
                     }
                 }
             }
-            hasNewline
-        } catch (_: Exception) {
-            false
+            hasBreak
+        } catch (_: Exception) { false }
+    }
+
+    private fun hashWithBlobHeader(size: Long): MessageDigest =
+        MessageDigest.getInstance("SHA-1").apply {
+            update(("blob " + size + "\u0000").toByteArray(Charsets.UTF_8))
         }
-    }
 
-    private fun newHash(size: Long): MessageDigest = MessageDigest.getInstance("SHA-1").apply {
-        update(("blob " + size + "\u0000").toByteArray(Charsets.UTF_8))
-    }
-
-    private fun hex(hash: MessageDigest): String =
+    private fun toHex(hash: MessageDigest) =
         hash.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
 
     /**
-     * Calculate two Git blob hashes as though all existing EOLs were LF or CRLF.
-     * Counting takes one pass; hashing both variants takes a second pass.
-     * No whole-file allocations or temporary files.
+     * Visits unchanged raw byte ranges and logical EOL tokens.
+     * Pending CRs cross read-buffer boundaries safely.
+     */
+    private fun scan(
+        file: File,
+        onData: (ByteArray, Int, Int) -> Unit,
+        onBreak: () -> Unit
+    ) {
+        var pendingCR = 0
+        file.inputStream().buffered().use { input ->
+            val bytes = ByteArray(65536)
+            while (true) {
+                val n = input.read(bytes)
+                if (n < 0) break
+                var start = 0
+                for (i in 0 until n) {
+                    val b = bytes[i].toInt() and 0xff
+                    if (b == CR || b == LF) {
+                        if (i > start) onData(bytes, start, i - start)
+                        if (b == CR) pendingCR++
+                        else {
+                            // LF and any immediately preceding CR run form one newline.
+                            pendingCR = 0
+                            onBreak()
+                        }
+                        start = i + 1
+                    } else if (pendingCR > 0) {
+                        // CR not followed by LF: each such CR is a newline.
+                        repeat(pendingCR) { onBreak() }
+                        pendingCR = 0
+                    }
+                }
+                if (start < n) onData(bytes, start, n - start)
+            }
+        }
+        repeat(pendingCR) { onBreak() }
+    }
+
+    /**
+     * Recompute Git blob hashes for a hypothetical LF/CRLF/CRCRLF version of FTP
+     * using two passes and constant memory, without downloading the GitHub file.
      */
     fun matchesGitBlob(ftpFile: File, githubBlobSha: String): Boolean {
         if (githubBlobSha.isBlank() || !isUtf8TextWithLineBreak(ftpFile)) return false
-
-        var breakCount = 0L
-        var crlfCount = 0L
-        var afterCR = false
-        ftpFile.inputStream().buffered().use { stream ->
-            val buffer = ByteArray(65536)
-            while (true) {
-                val n = stream.read(buffer)
-                if (n < 0) break
-                for (i in 0 until n) {
-                    when (buffer[i].toInt() and 0xff) {
-                        CR -> { breakCount++; afterCR = true }
-                        LF -> {
-                            if (afterCR) crlfCount++ else breakCount++
-                            afterCR = false
-                        }
-                        else -> afterCR = false
-                    }
-                }
-            }
-        }
-        if (breakCount == 0L) return false
-        val lfSize = ftpFile.length() - crlfCount
-        val lfHash = newHash(lfSize)
-        val crlfHash = newHash(lfSize + breakCount)
-        val lfByte = byteArrayOf(LF.toByte())
-        val crlfBytes = byteArrayOf(CR.toByte(), LF.toByte())
-        afterCR = false
-
-        ftpFile.inputStream().buffered().use { stream ->
-            val buffer = ByteArray(65536)
-            while (true) {
-                val n = stream.read(buffer)
-                if (n < 0) break
-                var segmentStart = 0
-                for (i in 0 until n) {
-                    val byte = buffer[i].toInt() and 0xff
-                    if (byte == CR || byte == LF) {
-                        if (i > segmentStart) {
-                            lfHash.update(buffer, segmentStart, i - segmentStart)
-                            crlfHash.update(buffer, segmentStart, i - segmentStart)
-                        }
-                        if (byte == CR || !afterCR) {
-                            lfHash.update(lfByte)
-                            crlfHash.update(crlfBytes)
-                        }
-                        segmentStart = i + 1
-                        afterCR = byte == CR
-                    } else {
-                        afterCR = false
-                    }
-                }
-                if (n > segmentStart) {
-                    lfHash.update(buffer, segmentStart, n - segmentStart)
-                    crlfHash.update(buffer, segmentStart, n - segmentStart)
-                }
-            }
-        }
-        return hex(lfHash).equals(githubBlobSha, ignoreCase = true) ||
-            hex(crlfHash).equals(githubBlobSha, ignoreCase = true)
+        var otherBytes = 0L
+        var breaks = 0L
+        scan(ftpFile, { _, _, count -> otherBytes += count }, { breaks++ })
+        if (breaks == 0L) return false
+        val variants = arrayOf(
+            byteArrayOf(LF.toByte()),
+            byteArrayOf(CR.toByte(), LF.toByte()),
+            byteArrayOf(CR.toByte(), CR.toByte(), LF.toByte())
+        )
+        val hashes = variants.map { hashWithBlobHeader(otherBytes + breaks * it.size) }
+        scan(ftpFile,
+            { buffer, offset, count -> hashes.forEach { it.update(buffer, offset, count) } },
+            { variants.indices.forEach { i -> hashes[i].update(variants[i]) } }
+        )
+        return hashes.any { toHex(it).equals(githubBlobSha, ignoreCase = true) }
     }
 
-    /** Rare fallback for repos containing mixed EOL styles, limited to small text files. */
+    /** For rare mixed-line-ending GitHub content; small files, verified separately. */
     fun sameNormalizedContent(first: File, second: File): Boolean {
-        fun canonical(file: File): String? {
-            if (!isUtf8TextWithLineBreak(file) || file.length() > TextDiff.MAX_DIFF_SIZE) return null
+        fun readCanonical(file: File): String? {
+            if (!isUtf8TextWithLineBreak(file) || file.length() > TextDiff.MAX_DIFF_SIZE)
+                return null
             return try {
                 val decoded = StandardCharsets.UTF_8.newDecoder()
                     .onMalformedInput(CodingErrorAction.REPORT)
                     .onUnmappableCharacter(CodingErrorAction.REPORT)
                     .decode(ByteBuffer.wrap(file.readBytes())).toString()
-                decoded.replace("\r\n", "\n").replace('\r', '\n')
+                normalizeLineEndings(decoded)
             } catch (_: Exception) { null }
         }
-        val left = canonical(first) ?: return false
-        return left == canonical(second)
+        val left = readCanonical(first) ?: return false
+        return left == readCanonical(second)
     }
 }
