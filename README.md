@@ -115,3 +115,12 @@ For ordinary LF-vs-CRLF differences, the comparison verifies Git blob hashes for
 ## Double-CR line endings (v0.8.3)
 
 Some EMKA files in GitHub contain `\\r\\r\\n` line endings (for example `mg-plugins/p4-gift-product/js/admin/promocode.js` and `mg-templates/emka2024/layout/email_template.php`). Logical-line diff and sync equality now treat any consecutive CRs immediately followed by LF as **one** EOL, not as added blank lines. The existing streaming hash verification covers uniform LF, CRLF and CRCRLF, while rare mixed EOL files use the verified small-file content comparison. Only EOL differences are ignored; code edits, other whitespace, encoding and actual blank lines remain significant.
+
+
+## GitHub branch switching and saved diff checkboxes (v0.9.0)
+
+In a mapping detail, tap **Ветка GitHub: ... · Изменить** to load real branches from the selected repository (up to 1000 with pagination) and choose one. Search supports slash-separated feature branch names. The FTP endpoint, selected GitHub/FTP paths, folder comparison mode, and nested include/exclude scope are preserved across branch switches. Only changing the repository or the mapped GitHub path resets the scope.
+
+Each mapping now stores *checked-file preferences separately for every GitHub branch*. On first Diff Check for a branch, all actionable changes are selected by default. Every checkbox, select-all, clear-all and invert action saves that branch's choices; after the next Diff Check or switching away/back, only saved paths that still have actionable changes are checked. Previously selected files that become identical/absent remain in preferences and reappear if they change again. Preferences are included automatically in the full plaintext JSON configuration export. Older configurations without saved preferences retain the old select-all default.
+
+Changing branches **invalidates the prior Diff Check and status**, requiring a fresh scan before transfers. WorkManager still verifies exact mapping metadata and file versions before uploading, so saved checkboxes never authorize transfers on a stale branch snapshot.

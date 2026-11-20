@@ -21,7 +21,8 @@ data class SyncMapping(
     val ftpDirectory: Boolean = true,
     val ftpPicked: Boolean = false,
     val compareMode: FolderCompareMode = FolderCompareMode.ALL,
-    val scope: ComparisonScope = ComparisonScope()
+    val scope: ComparisonScope = ComparisonScope(),
+    val fileSelections: BranchFileSelections = BranchFileSelections()
 ) {
     val ready: Boolean get() = repository.isNotBlank() && branch.isNotBlank() &&
         serverId.isNotBlank() && githubPicked && ftpPicked &&
@@ -38,6 +39,7 @@ data class SyncMapping(
         put("ftpPicked", ftpPicked)
         put("compareMode", compareMode.name)
         put("scope", scope.toJson())
+        put("fileSelections", fileSelections.toJson())
     }
 
     companion object {
@@ -53,8 +55,56 @@ data class SyncMapping(
                 FolderCompareMode.valueOf(o.optString("compareMode", FolderCompareMode.ALL.name))
             }.getOrDefault(FolderCompareMode.ALL),
             scope = if (o.has("scope")) ComparisonScope.fromJson(o.getJSONArray("scope"))
-                else ComparisonScope()
+                else ComparisonScope(),
+            fileSelections = o.optJSONObject("fileSelections")
+                ?.let(BranchFileSelections::fromJson) ?: BranchFileSelections()
         )
+    }
+}
+
+/**
+ * Saved checkbox preferences keyed by GitHub branch within ONE mapping.
+ *
+ * Missing branch preference: select all changed files (legacy behavior).
+ * Present preference, including an empty set: restore exactly the saved paths
+ * that are actionable in the NEW diff. Hidden/identical paths are kept in the
+ * preference so they can be restored if they change again.
+ *
+ * These are preferences ONLY, never a transfer authorization or a diff snapshot.
+ */
+data class BranchFileSelections(val byBranch: Map<String, Set<String>> = emptyMap()) {
+    fun visible(branch: String, eligible: Set<String>): Set<String> =
+        byBranch[branch]?.intersect(eligible) ?: eligible
+
+    fun remember(branch: String, eligible: Set<String>, selected: Set<String>): BranchFileSelections {
+        require(branch.isNotBlank()) { "GitHub branch is empty" }
+        require(selected.all { it in eligible }) { "Cannot select a file outside current diff" }
+        val previous = byBranch[branch].orEmpty()
+        return copy(byBranch = byBranch + (branch to ((previous - eligible) + selected)))
+    }
+
+    fun toJson(): JSONObject = JSONObject().apply {
+        byBranch.forEach { (branch, paths) ->
+            put(branch, JSONArray().also { array ->
+                paths.sorted().forEach { array.put(it) }
+            })
+        }
+    }
+
+    companion object {
+        fun fromJson(value: JSONObject): BranchFileSelections {
+            val selections = linkedMapOf<String, Set<String>>()
+            val names = value.keys()
+            while (names.hasNext()) {
+                val branch = names.next()
+                require(branch.isNotBlank()) { "Empty branch in file selections" }
+                val entries = value.getJSONArray(branch)
+                require(entries.length() <= 10000) { "Too many saved selected files" }
+                selections[branch] = (0 until entries.length()).map { entries.getString(it) }.toSet()
+            }
+            require(selections.size <= 500) { "Too many saved branches" }
+            return BranchFileSelections(selections)
+        }
     }
 }
 

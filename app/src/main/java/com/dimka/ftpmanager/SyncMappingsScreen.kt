@@ -126,6 +126,7 @@ fun SyncMappingsScreen(vm: SyncViewModel) {
             dismissButton = { TextButton(onClick = { delete = null }) { Text("Отмена") } })
     }
     if (vm.picker != null) MappingPickerDialog(vm)
+    if (vm.branchPickerId != null) BranchPickerDialog(vm)
     if (vm.scopePicker != null) ComparisonScopeDialog(vm)
     vm.preview?.let { state ->
         AlertDialog(onDismissRequest = vm::cancelPreview,
@@ -325,6 +326,18 @@ private fun SyncDetail(vm: SyncViewModel, mapping: SyncMapping, onRename: () -> 
                 if (mapping.githubPicked) (if (mapping.githubDirectory) "📁 " else "📄 ") +
                     mapping.githubPath.ifBlank { "/" } else "Файл/папка не выбраны",
                 onChoose = { vm.beginGithub(mapping.id) })
+        }
+        if (mapping.githubPicked) item {
+            OutlinedButton(
+                onClick = { vm.openBranchPicker(mapping.id) },
+                enabled = !vm.loading && !vm.checkAllRunning && !vm.branchPickerBusy,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Ветка GitHub: " + mapping.branch + " · Изменить")
+            }
+            Text("Выбор папок сохраняется для связи, галочки файлов — для каждой ветки. После смены ветки запусти Diff Check.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         item {
             EndpointBlock("FTP / FTPS / SFTP",
@@ -587,6 +600,56 @@ private fun ComparisonScopeDialog(vm: SyncViewModel) {
         },
         confirmButton = {
             Button(onClick = vm::closeScopePicker) { Text("Готово") }
+        }
+    )
+}
+
+@Composable
+private fun BranchPickerDialog(vm: SyncViewModel) {
+    val id = vm.branchPickerId ?: return
+    val mapping = vm.mappings.firstOrNull { it.id == id } ?: return
+    var search by remember(id) { mutableStateOf("") }
+    val visible = vm.githubBranches.filter { it.contains(search.trim(), ignoreCase = true) }
+    AlertDialog(
+        onDismissRequest = vm::closeBranchPicker,
+        title = { Text("Выбрать ветку GitHub") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(mapping.repository + " · текущая: " + mapping.branch,
+                    style = MaterialTheme.typography.bodySmall)
+                OutlinedTextField(
+                    value = search, onValueChange = { search = it },
+                    label = { Text("Поиск ветки") },
+                    singleLine = true, modifier = Modifier.fillMaxWidth()
+                )
+                if (vm.branchPickerBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
+                if (vm.branchPickerError.isNotBlank()) {
+                    Text(vm.branchPickerError, color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall)
+                }
+                LazyColumn(Modifier.heightIn(max = 360.dp)) {
+                    items(visible, key = { it }) { branch ->
+                        Row(
+                            Modifier.fillMaxWidth().clickable(
+                                enabled = !vm.loading && !vm.branchPickerBusy
+                            ) { vm.chooseBranch(id, branch) }.padding(vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(branch, Modifier.weight(1f), maxLines = 2, fontSize = 13.sp)
+                            if (branch == mapping.branch)
+                                Text("Текущая", fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.primary)
+                        }
+                        HorizontalDivider()
+                    }
+                }
+                Text("При смене ветки пути и исключения сохраняются. Галочки вернутся после новой проверки этой ветки. Старый diff использовать нельзя.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = vm::closeBranchPicker) { Text("Закрыть") }
         }
     )
 }

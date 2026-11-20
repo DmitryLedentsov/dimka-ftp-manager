@@ -14,6 +14,7 @@ import com.dimka.ftpmanager.data.SettingsStore
 import com.dimka.ftpmanager.data.SyncDirection
 import com.dimka.ftpmanager.data.SyncMapping
 import com.dimka.ftpmanager.data.ComparisonScope
+import com.dimka.ftpmanager.data.BranchFileSelections
 import com.dimka.ftpmanager.data.FolderCompareMode
 import com.dimka.ftpmanager.data.SyncFileSelection
 import com.dimka.ftpmanager.data.SyncPaths
@@ -79,6 +80,14 @@ class SyncViewModel(app: Application) : AndroidViewModel(app) {
     var githubRepos by mutableStateOf<List<String>>(emptyList())
         private set
     var githubTree by mutableStateOf<List<RepoEntry>>(emptyList())
+        private set
+    var branchPickerId by mutableStateOf<String?>(null)
+        private set
+    var githubBranches by mutableStateOf<List<String>>(emptyList())
+        private set
+    var branchPickerBusy by mutableStateOf(false)
+        private set
+    var branchPickerError by mutableStateOf("")
         private set
     var remoteEntries by mutableStateOf<List<MappingBrowserItem>>(emptyList())
         private set
@@ -269,7 +278,9 @@ class SyncViewModel(app: Application) : AndroidViewModel(app) {
         statuses = store.checkStatuses()
         if (activeId == id) {
             comparison = result
-            selectedPaths = SyncFileSelection.selectable(result.files)
+            selectedPaths = result.mapping.fileSelections.visible(
+                result.mapping.branch, SyncFileSelection.selectable(result.files)
+            )
         }
     }
     private fun checkError(id: String, error: Exception) {
@@ -338,18 +349,46 @@ class SyncViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
     }
+    /**
+     * Persist checkbox choices without invalidating content hashes. Only metadata
+     * in the checked snapshot changes; a transfer still uses the exact checked
+     * file hashes and rechecks them in TransferWorker before writing anything.
+     */
+    private fun rememberFileSelection(nextSelection: Set<String>) {
+        if (loading || checkAllRunning) return
+        val checked = comparison ?: return
+        val mapping = mappings.firstOrNull { it.id == checked.mapping.id } ?: return
+        if (checked.mapping != mapping) return
+        val eligible = SyncFileSelection.selectable(checked.files)
+        val selected = nextSelection.intersect(eligible)
+        val nextMapping = mapping.copy(
+            fileSelections = mapping.fileSelections.remember(mapping.branch, eligible, selected)
+        )
+        try {
+            store.saveMappings(mappings.map { if (it.id == mapping.id) nextMapping else it })
+            mappings = mappings.map { if (it.id == mapping.id) nextMapping else it }
+            comparison = checked.copy(mapping = nextMapping)
+            selectedPaths = selected
+            preview = null
+        } catch (e: Exception) {
+            message = "Не удалось сохранить выбор файлов: " + e.message
+        }
+    }
+
     fun toggleFile(relative: String) {
         val check = comparison ?: return
         if (relative !in SyncFileSelection.selectable(check.files)) return
-        selectedPaths = if (relative in selectedPaths) selectedPaths - relative else selectedPaths + relative
+        rememberFileSelection(
+            if (relative in selectedPaths) selectedPaths - relative else selectedPaths + relative
+        )
     }
     fun setAllFiles(value: Boolean) {
         val check = comparison ?: return
-        selectedPaths = if (value) SyncFileSelection.selectable(check.files) else emptySet()
+        rememberFileSelection(if (value) SyncFileSelection.selectable(check.files) else emptySet())
     }
     fun invertSelectedFiles() {
         val check = comparison ?: return
-        selectedPaths = SyncFileSelection.invert(check.files, selectedPaths)
+        rememberFileSelection(SyncFileSelection.invert(check.files, selectedPaths))
     }
     fun setCompareMode(id: String, mode: FolderCompareMode) {
         if (loading || checkAllRunning) return
@@ -380,6 +419,8 @@ class SyncViewModel(app: Application) : AndroidViewModel(app) {
     fun reloadFromStore() {
         activeId = null
         picker = null
+        branchPickerId = null
+        githubBranches = emptyList()
         scopePicker = null
         scopeEntries = emptyList()
         preview = null
@@ -397,6 +438,49 @@ class SyncViewModel(app: Application) : AndroidViewModel(app) {
 
     fun dismissMessage() { message = null }
     fun cancelPicker() { picker = null }
+
+    fun openBranchPicker(id: String) {
+        val mapping = mappings.firstOrNull { it.id == id } ?: return
+        if (!mapping.githubPicked || mapping.repository.isBlank()) return
+        if (loading || checkAllRunning || branchPickerBusy) return
+        branchPickerId = id
+        githubBranches = emptyList()
+        branchPickerError = ""
+        branchPickerBusy = true
+        viewModelScope.launch {
+            try {
+                val names = withContext(Dispatchers.IO) {
+                    GitHubClient(GitHubOAuth.accessToken(getApplication()))
+                        .branches(mapping.repository)
+                }
+                if (branchPickerId == id &&
+                    mappings.any { it.id == id && it.repository == mapping.repository }) {
+                    githubBranches = names
+                    if (names.isEmpty()) branchPickerError = "В репозитории нет доступных веток"
+                }
+            } catch (e: Exception) {
+                if (branchPickerId == id)
+                    branchPickerError = "Не удалось получить ветки: " + (e.message ?: "ошибка")
+            } finally {
+                branchPickerBusy = false
+            }
+        }
+    }
+
+    fun closeBranchPicker() {
+        branchPickerId = null
+        githubBranches = emptyList()
+        branchPickerError = ""
+    }
+
+    fun chooseBranch(id: String, branch: String) {
+        if (loading || checkAllRunning || branchPickerBusy || branchPickerId != id ||
+            branch !in githubBranches) return
+        val mapping = mappings.firstOrNull { it.id == id } ?: return
+        // Do NOT reset scope or per-branch file choices here.
+        if (branch != mapping.branch) replace(id) { it.copy(branch = branch) }
+        closeBranchPicker()
+    }
     fun cancelPreview() { preview = null }
     private fun save(value: List<SyncMapping>) {
         try {
@@ -451,7 +535,9 @@ class SyncViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val data = withContext(Dispatchers.IO) {
                     val client = GitHubClient(GitHubOAuth.accessToken(getApplication()))
-                    val branch = client.verify(repo)
+                    val previous = mappings.firstOrNull { it.id == current.mappingId }
+                    val branch = if (previous?.repository == repo &&
+                        previous.branch.isNotBlank()) previous.branch else client.verify(repo)
                     branch to client.tree(repo, branch)
                 }
                 if (picker?.mappingId == current.mappingId && picker?.repository == repo) {
@@ -493,8 +579,10 @@ class SyncViewModel(app: Application) : AndroidViewModel(app) {
                 ftpPicked = if (mismatch) false else old.ftpPicked,
                 ftpPath = if (mismatch) "" else old.ftpPath,
                 scope = if (old.githubPath != path.trim('/') ||
-                    old.repository != current.repository || old.branch != current.branch)
-                    ComparisonScope() else old.scope)
+                    old.repository != current.repository) ComparisonScope() else old.scope,
+                fileSelections = if (old.githubPath != path.trim('/') ||
+                    old.repository != current.repository) BranchFileSelections()
+                    else old.fileSelections)
         }
         picker = null
     }

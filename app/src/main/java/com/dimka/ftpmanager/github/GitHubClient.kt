@@ -48,6 +48,21 @@ class GitHubClient(private val token: String) {
 
     fun verify(repo: String): String = obj("GET", repoPath(repo)).optString("default_branch", "master")
 
+    /** Lists real repository branches, including feature/foo; supports pagination. */
+    fun branches(repo: String): List<String> {
+        val names = linkedSetOf<String>()
+        for (page in 1..10) {
+            val data = JSONArray(String(api("GET",
+                repoPath(repo) + "/branches?per_page=100&page=" + page), Charsets.UTF_8))
+            for (index in 0 until data.length()) {
+                val branch = data.getJSONObject(index).getString("name")
+                if (branch.isNotBlank()) names.add(branch)
+            }
+            if (data.length() < 100) break
+        }
+        return names.toList().sortedWith(String.CASE_INSENSITIVE_ORDER)
+    }
+
     fun tree(repo: String, branch: String): List<RepoEntry> {
         val payload = obj("GET", "${repoPath(repo)}/git/trees/${ref(branch)}?recursive=1")
         check(!payload.optBoolean("truncated")) { "GitHub tree too large, use a smaller repository" }
