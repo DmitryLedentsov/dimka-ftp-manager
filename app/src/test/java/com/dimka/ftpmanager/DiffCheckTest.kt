@@ -154,6 +154,58 @@ class DiffCheckTest {
         } finally { git.delete(); ftp.delete() }
     }
 
+
+    @Test fun mogutaDoubleCrIsOneNewlineAndNotAnExtraBlankLine() {
+        val git = File.createTempFile("dimka-moguta-git-", ".php")
+        val ftp = File.createTempFile("dimka-moguta-ftp-", ".php")
+        try {
+            git.writeText("<div>\r\r\n  <img>\r\r\n  <?php echo \$content; ?>\r\r\n</div>")
+            ftp.writeText("<div>\n  <img>\n  <?php echo \$content; ?>\n</div>")
+            val githubSha = SyncComparisonEngine.gitBlobHash(git)
+            assertTrue(com.dimka.ftpmanager.transfer.LineEndingEquivalence.matchesGitBlob(
+                ftp, githubSha))
+            assertTrue(com.dimka.ftpmanager.transfer.LineEndingEquivalence.sameNormalizedContent(
+                ftp, git))
+            val diff = TextDiff.preview(git, ftp)
+            assertEquals(0, diff.added)
+            assertEquals(0, diff.removed)
+            ftp.writeText("<div>\r\n  <img>\r\n  <?php echo \$content; ?>\r\n</div>")
+            assertTrue(com.dimka.ftpmanager.transfer.LineEndingEquivalence.matchesGitBlob(
+                ftp, githubSha))
+        } finally { git.delete(); ftp.delete() }
+    }
+
+    @Test fun doubleCrAtReadBufferBoundaryIsPreservedCorrectly() {
+        val git = File.createTempFile("dimka-eol-boundary-git-", ".js")
+        val ftp = File.createTempFile("dimka-eol-boundary-ftp-", ".js")
+        try {
+            val prefix = "x".repeat(65535)
+            git.writeText(prefix + "\r\r\nsecond\n")
+            ftp.writeText(prefix + "\nsecond\n")
+            assertTrue(com.dimka.ftpmanager.transfer.LineEndingEquivalence.matchesGitBlob(
+                ftp, SyncComparisonEngine.gitBlobHash(git)))
+            assertTrue(com.dimka.ftpmanager.transfer.LineEndingEquivalence.matchesGitBlob(
+                git, SyncComparisonEngine.gitBlobHash(ftp)))
+        } finally { git.delete(); ftp.delete() }
+    }
+
+    @Test fun repeatedCrPlusLfMustNotHideRealCodeOrBlankLines() {
+        val git = File.createTempFile("dimka-eol-real-git-", ".js")
+        val ftp = File.createTempFile("dimka-eol-real-ftp-", ".js")
+        try {
+            git.writeText("const count = 20;\r\r\n")
+            ftp.writeText("const count = 21;\n")
+            assertTrue(!com.dimka.ftpmanager.transfer.LineEndingEquivalence.matchesGitBlob(
+                ftp, SyncComparisonEngine.gitBlobHash(git)))
+            assertEquals(1, TextDiff.preview(git, ftp).added)
+            assertEquals(1, TextDiff.preview(git, ftp).removed)
+            git.writeText("first\r\r\nsecond\r\r\n")
+            ftp.writeText("first\n\nsecond\n")
+            assertTrue(!com.dimka.ftpmanager.transfer.LineEndingEquivalence.sameNormalizedContent(
+                ftp, git))
+        } finally { git.delete(); ftp.delete() }
+    }
+
     @Test fun binaryFilesCannotBeRenderedAsText() {
         val file = File.createTempFile("dimka-bin-", ".bin")
         try {

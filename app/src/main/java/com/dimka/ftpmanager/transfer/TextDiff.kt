@@ -28,7 +28,7 @@ object TextDiff {
             .decode(ByteBuffer.wrap(data)).toString()
         // GitHub and FTP may store identical code with different line endings.
         // Compare logical lines, but keep exact byte hashes for sync conflict checks.
-        val lines = text.replace("\r\n", "\n").replace('\r', '\n').split("\n")
+        val lines = LineEndingEquivalence.normalizeLineEndings(text).split("\n")
         require(lines.size <= MAX_DIFF_LINES) { "Слишком много строк для diff (лимит 1400)." }
         return lines
     }
@@ -37,13 +37,13 @@ object TextDiff {
         val old = read(ftp)
         val newer = read(github)
         val compared = compare(old, newer)
-        // EOL-only edits are not semantic line edits, yet byte-accurate sync
-        // intentionally still sees these files as CHANGED.
+        // Any raw-byte difference that disappears after EOL normalization
+        // is ignored by sync comparison, but transferred files still use exact hashes.
         if (ftp != null && github != null && compared.added == 0 && compared.removed == 0 &&
             !ftp.readBytes().contentEquals(github.readBytes())) {
             return compared.copy(
-                note = "Текст совпадает построчно, но байты отличаются (вероятнее всего CRLF/LF). " +
-                    "Файл всё ещё считается изменённым при побайтовой синхронизации."
+                note = "Текст совпадает построчно: отличаются только переносы строк " +
+                    "(LF/CRLF/CRCRLF). В Diff Check такие файлы считаются одинаковыми."
             )
         }
         return compared
